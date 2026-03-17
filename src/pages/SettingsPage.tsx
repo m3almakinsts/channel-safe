@@ -1,10 +1,12 @@
 import { ArrowLeft, LogOut, Trash2, Moon, Sun } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
+import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { useState } from 'react';
 
@@ -18,8 +20,10 @@ function formatBytes(bytes: number): string {
 
 const SettingsPage = () => {
   const navigate = useNavigate();
-  const { profile, signOut } = useAuthStore();
+  const { profile, user, signOut } = useAuthStore();
   const [darkMode, setDarkMode] = useState(document.documentElement.classList.contains('dark'));
+  const [deleteDialog, setDeleteDialog] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const toggleDark = () => {
     document.documentElement.classList.toggle('dark');
@@ -29,6 +33,26 @@ const SettingsPage = () => {
   const handleLogout = async () => {
     await signOut();
     navigate('/login');
+  };
+
+  const handleDeleteAccount = async () => {
+    if (!user) return;
+    setDeleting(true);
+    try {
+      // Delete user's files, folders, and profile
+      await supabase.from('files').delete().eq('user_id', user.id);
+      await supabase.from('folders').delete().eq('user_id', user.id);
+      await supabase.from('profiles').delete().eq('user_id', user.id);
+      await signOut();
+      toast.success('Account data deleted. You have been signed out.');
+      navigate('/login');
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to delete account data');
+    } finally {
+      setDeleting(false);
+      setDeleteDialog(false);
+    }
   };
 
   return (
@@ -87,13 +111,31 @@ const SettingsPage = () => {
           <Button
             variant="outline"
             className="w-full justify-start gap-3 text-destructive hover:text-destructive"
-            onClick={() => toast.info('Account deletion coming soon')}
+            onClick={() => setDeleteDialog(true)}
           >
             <Trash2 className="h-4 w-4" />
             Delete account
           </Button>
         </div>
       </div>
+
+      {/* Delete Account Confirmation */}
+      <Dialog open={deleteDialog} onOpenChange={setDeleteDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete account?</DialogTitle>
+            <DialogDescription>
+              This will permanently delete all your files, folders, and profile data. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="ghost" onClick={() => setDeleteDialog(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDeleteAccount} disabled={deleting}>
+              {deleting ? 'Deleting...' : 'Delete everything'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
