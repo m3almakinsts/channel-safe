@@ -65,7 +65,14 @@ export const NewButton = () => {
         setUploadProgress(tempId, 60);
 
         // Upload via edge function
-        const base64Data = btoa(String.fromCharCode(...new Uint8Array(encrypted)));
+        // Convert to base64 in chunks to avoid call stack overflow
+        const bytes = new Uint8Array(encrypted);
+        let binary = '';
+        const chunkSize = 8192;
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+          binary += String.fromCharCode(...bytes.slice(i, i + chunkSize));
+        }
+        const base64Data = btoa(binary);
         
         const { data: uploadData, error: uploadError } = await supabase.functions.invoke('telegram-upload', {
           body: {
