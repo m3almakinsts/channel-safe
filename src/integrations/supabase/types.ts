@@ -14,7 +14,151 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      files: {
+        Row: {
+          created_at: string
+          encryption_iv: string | null
+          id: string
+          is_starred: boolean
+          is_trashed: boolean
+          mime_type: string | null
+          name: string
+          original_name: string | null
+          parent_folder_id: string | null
+          size: number
+          telegram_file_id: string | null
+          telegram_message_ids: Json | null
+          trashed_at: string | null
+          updated_at: string
+          upload_status: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          encryption_iv?: string | null
+          id?: string
+          is_starred?: boolean
+          is_trashed?: boolean
+          mime_type?: string | null
+          name: string
+          original_name?: string | null
+          parent_folder_id?: string | null
+          size?: number
+          telegram_file_id?: string | null
+          telegram_message_ids?: Json | null
+          trashed_at?: string | null
+          updated_at?: string
+          upload_status?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          encryption_iv?: string | null
+          id?: string
+          is_starred?: boolean
+          is_trashed?: boolean
+          mime_type?: string | null
+          name?: string
+          original_name?: string | null
+          parent_folder_id?: string | null
+          size?: number
+          telegram_file_id?: string | null
+          telegram_message_ids?: Json | null
+          trashed_at?: string | null
+          updated_at?: string
+          upload_status?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "files_parent_folder_id_fkey"
+            columns: ["parent_folder_id"]
+            isOneToOne: false
+            referencedRelation: "folders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      folders: {
+        Row: {
+          created_at: string
+          id: string
+          is_starred: boolean
+          is_trashed: boolean
+          name: string
+          parent_folder_id: string | null
+          trashed_at: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          is_starred?: boolean
+          is_trashed?: boolean
+          name: string
+          parent_folder_id?: string | null
+          trashed_at?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          is_starred?: boolean
+          is_trashed?: boolean
+          name?: string
+          parent_folder_id?: string | null
+          trashed_at?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "folders_parent_folder_id_fkey"
+            columns: ["parent_folder_id"]
+            isOneToOne: false
+            referencedRelation: "folders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      profiles: {
+        Row: {
+          avatar_url: string | null
+          created_at: string
+          display_name: string | null
+          email: string | null
+          encryption_salt: string | null
+          id: string
+          storage_used: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          avatar_url?: string | null
+          created_at?: string
+          display_name?: string | null
+          email?: string | null
+          encryption_salt?: string | null
+          id?: string
+          storage_used?: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          avatar_url?: string | null
+          created_at?: string
+          display_name?: string | null
+          email?: string | null
+          encryption_salt?: string | null
+          id?: string
+          storage_used?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
