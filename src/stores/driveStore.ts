@@ -83,20 +83,27 @@ export const useDriveStore = create<DriveState>((set, get) => ({
     set({ loading: true });
     const targetFolder = folderId !== undefined ? folderId : get().currentFolderId;
 
-    const [filesRes, foldersRes] = await Promise.all([
-      supabase
-        .from('files')
-        .select('*')
-        .eq('is_trashed', false)
-        .is('parent_folder_id', targetFolder)
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('folders')
-        .select('*')
-        .eq('is_trashed', false)
-        .is('parent_folder_id', targetFolder)
-        .order('name', { ascending: true }),
-    ]);
+    const filesQuery = supabase
+      .from('files')
+      .select('*')
+      .eq('is_trashed', false)
+      .order('created_at', { ascending: false });
+    
+    const foldersQuery = supabase
+      .from('folders')
+      .select('*')
+      .eq('is_trashed', false)
+      .order('name', { ascending: true });
+
+    if (targetFolder) {
+      filesQuery.eq('parent_folder_id', targetFolder);
+      foldersQuery.eq('parent_folder_id', targetFolder);
+    } else {
+      filesQuery.is('parent_folder_id', null);
+      foldersQuery.is('parent_folder_id', null);
+    }
+
+    const [filesRes, foldersRes] = await Promise.all([filesQuery, foldersQuery]);
 
     set({
       files: (filesRes.data ?? []) as FileItem[],
