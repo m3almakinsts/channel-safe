@@ -32,6 +32,7 @@ export interface FolderItem {
 type ViewMode = 'grid' | 'list';
 type SortBy = 'name' | 'date' | 'size';
 type SortOrder = 'asc' | 'desc';
+type ActiveView = 'drive' | 'starred' | 'recent' | 'trash';
 
 interface DriveState {
   files: FileItem[];
@@ -44,12 +45,14 @@ interface DriveState {
   searchQuery: string;
   loading: boolean;
   uploadProgress: Map<string, number>;
+  activeView: ActiveView;
 
   setCurrentFolder: (folderId: string | null) => void;
   setViewMode: (mode: ViewMode) => void;
   setSortBy: (sort: SortBy) => void;
   setSortOrder: (order: SortOrder) => void;
   setSearchQuery: (query: string) => void;
+  setActiveView: (view: ActiveView) => void;
   fetchContents: (folderId?: string | null) => Promise<void>;
   fetchBreadcrumbs: (folderId: string | null) => Promise<void>;
   setUploadProgress: (fileId: string, progress: number) => void;
@@ -67,9 +70,10 @@ export const useDriveStore = create<DriveState>((set, get) => ({
   searchQuery: '',
   loading: false,
   uploadProgress: new Map(),
+  activeView: 'drive',
 
   setCurrentFolder: (folderId) => {
-    set({ currentFolderId: folderId });
+    set({ currentFolderId: folderId, activeView: 'drive' });
     get().fetchContents(folderId);
     get().fetchBreadcrumbs(folderId);
   },
@@ -79,35 +83,49 @@ export const useDriveStore = create<DriveState>((set, get) => ({
   setSortOrder: (order) => set({ sortOrder: order }),
   setSearchQuery: (query) => set({ searchQuery: query }),
 
+  setActiveView: (view) => {
+    set({ activeView: view, currentFolderId: null });
+    get().fetchContents(null);
+    set({ breadcrumbs: [{ id: null, name: view === 'trash' ? 'Trash' : view === 'starred' ? 'Starred' : view === 'recent' ? 'Recent' : 'My Drive' }] });
+  },
+
   fetchContents: async (folderId) => {
     set({ loading: true });
     const targetFolder = folderId !== undefined ? folderId : get().currentFolderId;
+    const view = get().activeView;
+
+    const isTrashed = view === 'trash';
+    const isRecent = view === 'recent';
 
     const filesQuery = supabase
       .from('files')
       .select('*')
-      .eq('is_trashed', false)
+      .eq('is_trashed', isTrashed)
       .order('created_at', { ascending: false });
-    
+
     const foldersQuery = supabase
       .from('folders')
       .select('*')
-      .eq('is_trashed', false)
+      .eq('is_trashed', isTrashed)
       .order('name', { ascending: true });
 
-    if (targetFolder) {
-      filesQuery.eq('parent_folder_id', targetFolder);
-      foldersQuery.eq('parent_folder_id', targetFolder);
-    } else {
-      filesQuery.is('parent_folder_id', null);
-      foldersQuery.is('parent_folder_id', null);
+    if (isRecent) {
+      filesQuery.gte('created_at', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString());
+    } else if (!isTrashed) {
+      if (targetFolder) {
+        filesQuery.eq('parent_folder_id', targetFolder);
+        foldersQuery.eq('parent_folder_id', targetFolder);
+      } else {
+        filesQuery.is('parent_folder_id', null);
+        foldersQuery.is('parent_folder_id', null);
+      }
     }
 
     const [filesRes, foldersRes] = await Promise.all([filesQuery, foldersQuery]);
 
     set({
       files: (filesRes.data ?? []) as FileItem[],
-      folders: (foldersRes.data ?? []) as FolderItem[],
+      folders: isRecent ? [] : (foldersRes.data ?? []) as FolderItem[],
       loading: false,
     });
   },

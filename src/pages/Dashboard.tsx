@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useCallback } from 'react';
 import { useDriveStore } from '@/stores/driveStore';
 import { useAuthStore } from '@/stores/authStore';
 import { supabase } from '@/integrations/supabase/client';
@@ -12,11 +12,9 @@ import { generateSalt } from '@/lib/encryption';
 import { motion } from 'framer-motion';
 
 const Dashboard = () => {
-  const [activeView, setActiveView] = useState('drive');
-  const { fetchContents, currentFolderId, setCurrentFolder } = useDriveStore();
+  const { fetchContents, currentFolderId, setActiveView, activeView } = useDriveStore();
   const { user, profile, fetchProfile } = useAuthStore();
 
-  // Initialize encryption salt if needed
   useEffect(() => {
     const initSalt = async () => {
       if (user && profile && !profile.encryption_salt) {
@@ -36,12 +34,8 @@ const Dashboard = () => {
   }, [currentFolderId, fetchContents]);
 
   const handleViewChange = useCallback((view: string) => {
-    setActiveView(view);
-    if (view === 'drive') {
-      setCurrentFolder(null);
-    }
-    // Other views (starred, recent, trash) can be implemented via filtering
-  }, [setCurrentFolder]);
+    setActiveView(view as 'drive' | 'starred' | 'recent' | 'trash');
+  }, [setActiveView]);
 
   return (
     <motion.div
@@ -57,7 +51,7 @@ const Dashboard = () => {
       <div className="flex-1 overflow-y-auto py-4">
         <FileGrid />
       </div>
-      <NewButton />
+      {activeView === 'drive' && <NewButton />}
       <UploadProgress />
     </motion.div>
   );
