@@ -8,7 +8,7 @@ import { Separator } from '@/components/ui/separator';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
@@ -24,6 +24,24 @@ const SettingsPage = () => {
   const [darkMode, setDarkMode] = useState(document.documentElement.classList.contains('dark'));
   const [deleteDialog, setDeleteDialog] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [totalStorage, setTotalStorage] = useState(0);
+
+  // Calculate actual storage from file sizes
+  useEffect(() => {
+    const calcStorage = async () => {
+      if (!user) return;
+      const { data } = await supabase
+        .from('files')
+        .select('size')
+        .eq('user_id', user.id)
+        .eq('is_trashed', false);
+      if (data) {
+        const total = data.reduce((sum, f) => sum + (f.size || 0), 0);
+        setTotalStorage(total);
+      }
+    };
+    calcStorage();
+  }, [user]);
 
   const toggleDark = () => {
     document.documentElement.classList.toggle('dark');
@@ -39,7 +57,6 @@ const SettingsPage = () => {
     if (!user) return;
     setDeleting(true);
     try {
-      // Delete user's files, folders, and profile
       await supabase.from('files').delete().eq('user_id', user.id);
       await supabase.from('folders').delete().eq('user_id', user.id);
       await supabase.from('profiles').delete().eq('user_id', user.id);
@@ -65,7 +82,6 @@ const SettingsPage = () => {
       </header>
 
       <div className="max-w-lg mx-auto p-4 space-y-6">
-        {/* Profile */}
         <div className="flex items-center gap-4 p-4 rounded-xl bg-surface">
           <Avatar className="h-14 w-14">
             <AvatarImage src={profile?.avatar_url || ''} />
@@ -79,17 +95,15 @@ const SettingsPage = () => {
           </div>
         </div>
 
-        {/* Storage */}
         <div className="p-4 rounded-xl bg-surface space-y-2">
           <p className="text-sm font-medium">Storage used</p>
-          <p className="text-2xl font-bold font-display">{formatBytes(profile?.storage_used || 0)}</p>
+          <p className="text-2xl font-bold font-display">{formatBytes(totalStorage)}</p>
           <div className="h-2 bg-surface-hover rounded-full overflow-hidden">
-            <div className="h-full bg-primary rounded-full" style={{ width: '0.1%' }} />
+            <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${Math.max(Math.min((totalStorage / (2 * 1024 * 1024 * 1024)) * 100, 100), 0.5)}%` }} />
           </div>
           <p className="text-xs text-muted-foreground">Unlimited storage via Telegram</p>
         </div>
 
-        {/* Appearance */}
         <div className="p-4 rounded-xl bg-surface">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -102,24 +116,18 @@ const SettingsPage = () => {
 
         <Separator />
 
-        {/* Actions */}
         <div className="space-y-2">
           <Button variant="outline" className="w-full justify-start gap-3" onClick={handleLogout}>
             <LogOut className="h-4 w-4" />
             Sign out
           </Button>
-          <Button
-            variant="outline"
-            className="w-full justify-start gap-3 text-destructive hover:text-destructive"
-            onClick={() => setDeleteDialog(true)}
-          >
+          <Button variant="outline" className="w-full justify-start gap-3 text-destructive hover:text-destructive" onClick={() => setDeleteDialog(true)}>
             <Trash2 className="h-4 w-4" />
             Delete account
           </Button>
         </div>
       </div>
 
-      {/* Delete Account Confirmation */}
       <Dialog open={deleteDialog} onOpenChange={setDeleteDialog}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>

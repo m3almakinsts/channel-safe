@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { MoreVertical, Star, Trash2, Pencil, Download, Eye } from 'lucide-react';
+import { MoreVertical, Star, Trash2, Pencil, Download, RotateCcw } from 'lucide-react';
 import { useDriveStore, type FileItem, type FolderItem } from '@/stores/driveStore';
 import { FileIcon } from './FileIcon';
 import { FolderIcon } from './FolderIcon';
@@ -8,6 +8,8 @@ import { RenameDialog } from './RenameDialog';
 import { FilePreview } from './FilePreview';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { supabase } from '@/integrations/supabase/client';
+import { useAuthStore } from '@/stores/authStore';
+import { decryptData } from '@/lib/encryption';
 import { toast } from 'sonner';
 
 function formatSize(bytes: number): string {
@@ -33,12 +35,22 @@ const item = {
 };
 
 export const FileGrid = () => {
-  const { files, folders, viewMode, sortBy, sortOrder, searchQuery, setCurrentFolder, fetchContents, currentFolderId } = useDriveStore();
+  const { files, folders, viewMode, sortBy, sortOrder, searchQuery, setCurrentFolder, fetchContents, currentFolderId, activeView } = useDriveStore();
   const [renameTarget, setRenameTarget] = useState<{ type: 'files' | 'folders'; id: string; name: string } | null>(null);
   const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
+  const { user, profile } = useAuthStore();
 
-  const filteredFolders = folders.filter(f => !searchQuery || f.name.toLowerCase().includes(searchQuery.toLowerCase()));
-  const filteredFiles = files.filter(f => {
+  // Filter based on active view
+  let displayFolders = folders;
+  let displayFiles = files;
+
+  if (activeView === 'starred') {
+    displayFolders = folders.filter(f => f.is_starred);
+    displayFiles = files.filter(f => f.is_starred);
+  }
+
+  const filteredFolders = displayFolders.filter(f => !searchQuery || f.name.toLowerCase().includes(searchQuery.toLowerCase()));
+  const filteredFiles = displayFiles.filter(f => {
     const displayName = f.original_name || f.name;
     return !searchQuery || displayName.toLowerCase().includes(searchQuery.toLowerCase());
   });
@@ -62,12 +74,64 @@ export const FileGrid = () => {
     fetchContents(currentFolderId);
   };
 
+  const restoreFromTrash = async (type: 'files' | 'folders', id: string) => {
+    await supabase.from(type).update({ is_trashed: false, trashed_at: null }).eq('id', id);
+    toast.success('Restored');
+    fetchContents(currentFolderId);
+  };
+
+  const permanentDelete = async (type: 'files' | 'folders', id: string) => {
+    await supabase.from(type).delete().eq('id', id);
+    toast.success('Permanently deleted');
+    fetchContents(currentFolderId);
+  };
+
+  const downloadFile = async (file: FileItem) => {
+    if (!user || !profile?.encryption_salt || !file.telegram_file_id) {
+      toast.error('Cannot download this file');
+      return;
+    }
+
+    const toastId = toast.loading(`Downloading ${file.original_name || file.name}...`);
+    try {
+      const { data, error } = await supabase.functions.invoke('telegram-download', {
+        body: { fileId: file.telegram_file_id },
+      });
+      if (error || !data?.fileData) throw error || new Error('No data');
+
+      const binaryString = atob(data.fileData);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+
+      const decrypted = await decryptData(bytes.buffer, file.encryption_iv!, user.id, profile.encryption_salt);
+      const blob = new Blob([decrypted], { type: file.mime_type || 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file.original_name || file.name;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success('Downloaded', { id: toastId });
+    } catch (err) {
+      console.error('Download error:', err);
+      toast.error('Download failed', { id: toastId });
+    }
+  };
+
+  const isTrashView = activeView === 'trash';
+
   if (filteredFolders.length === 0 && sortedFiles.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
-        <div className="text-6xl mb-4">📂</div>
-        <p className="text-lg font-medium">No files here</p>
-        <p className="text-sm">Upload files or create a folder to get started</p>
+        <div className="text-6xl mb-4">{isTrashView ? '🗑️' : activeView === 'starred' ? '⭐' : activeView === 'recent' ? '🕐' : '📂'}</div>
+        <p className="text-lg font-medium">
+          {isTrashView ? 'Trash is empty' : activeView === 'starred' ? 'No starred items' : activeView === 'recent' ? 'No recent files' : 'No files here'}
+        </p>
+        <p className="text-sm">
+          {isTrashView ? 'Items you delete will appear here' : activeView === 'starred' ? 'Star files to find them easily' : 'Upload files or create a folder to get started'}
+        </p>
       </div>
     );
   }
@@ -77,10 +141,10 @@ export const FileGrid = () => {
       {viewMode === 'list' ? (
         <motion.div variants={container} initial="hidden" animate="show" className="px-4">
           {filteredFolders.map(folder => (
-            <FolderListItem key={folder.id} folder={folder} onOpen={() => setCurrentFolder(folder.id)} onToggleStar={() => toggleStar('folders', folder.id, folder.is_starred)} onTrash={() => moveToTrash('folders', folder.id)} onRename={() => setRenameTarget({ type: 'folders', id: folder.id, name: folder.name })} />
+            <FolderListItem key={folder.id} folder={folder} onOpen={() => !isTrashView && setCurrentFolder(folder.id)} onToggleStar={() => toggleStar('folders', folder.id, folder.is_starred)} onTrash={() => moveToTrash('folders', folder.id)} onRestore={() => restoreFromTrash('folders', folder.id)} onDelete={() => permanentDelete('folders', folder.id)} onRename={() => setRenameTarget({ type: 'folders', id: folder.id, name: folder.name })} isTrashView={isTrashView} />
           ))}
           {sortedFiles.map(file => (
-            <FileListItem key={file.id} file={file} onToggleStar={() => toggleStar('files', file.id, file.is_starred)} onTrash={() => moveToTrash('files', file.id)} onRename={() => setRenameTarget({ type: 'files', id: file.id, name: file.original_name || file.name })} onPreview={() => setPreviewFile(file)} />
+            <FileListItem key={file.id} file={file} onToggleStar={() => toggleStar('files', file.id, file.is_starred)} onTrash={() => moveToTrash('files', file.id)} onRestore={() => restoreFromTrash('files', file.id)} onDelete={() => permanentDelete('files', file.id)} onRename={() => setRenameTarget({ type: 'files', id: file.id, name: file.original_name || file.name })} onPreview={() => setPreviewFile(file)} onDownload={() => downloadFile(file)} isTrashView={isTrashView} />
           ))}
         </motion.div>
       ) : (
@@ -90,7 +154,7 @@ export const FileGrid = () => {
               <p className="text-xs font-medium text-muted-foreground mb-3 uppercase tracking-wider">Folders</p>
               <motion.div variants={container} initial="hidden" animate="show" className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
                 {filteredFolders.map(folder => (
-                  <FolderGridItem key={folder.id} folder={folder} onOpen={() => setCurrentFolder(folder.id)} onToggleStar={() => toggleStar('folders', folder.id, folder.is_starred)} onTrash={() => moveToTrash('folders', folder.id)} onRename={() => setRenameTarget({ type: 'folders', id: folder.id, name: folder.name })} />
+                  <FolderGridItem key={folder.id} folder={folder} onOpen={() => !isTrashView && setCurrentFolder(folder.id)} onToggleStar={() => toggleStar('folders', folder.id, folder.is_starred)} onTrash={() => moveToTrash('folders', folder.id)} onRestore={() => restoreFromTrash('folders', folder.id)} onDelete={() => permanentDelete('folders', folder.id)} onRename={() => setRenameTarget({ type: 'folders', id: folder.id, name: folder.name })} isTrashView={isTrashView} />
                 ))}
               </motion.div>
             </div>
@@ -101,7 +165,7 @@ export const FileGrid = () => {
               <p className="text-xs font-medium text-muted-foreground mb-3 uppercase tracking-wider">Files</p>
               <motion.div variants={container} initial="hidden" animate="show" className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
                 {sortedFiles.map(file => (
-                  <FileGridItem key={file.id} file={file} onToggleStar={() => toggleStar('files', file.id, file.is_starred)} onTrash={() => moveToTrash('files', file.id)} onRename={() => setRenameTarget({ type: 'files', id: file.id, name: file.original_name || file.name })} onPreview={() => setPreviewFile(file)} />
+                  <FileGridItem key={file.id} file={file} onToggleStar={() => toggleStar('files', file.id, file.is_starred)} onTrash={() => moveToTrash('files', file.id)} onRestore={() => restoreFromTrash('files', file.id)} onDelete={() => permanentDelete('files', file.id)} onRename={() => setRenameTarget({ type: 'files', id: file.id, name: file.original_name || file.name })} onPreview={() => setPreviewFile(file)} onDownload={() => downloadFile(file)} isTrashView={isTrashView} />
                 ))}
               </motion.div>
             </div>
@@ -124,7 +188,18 @@ export const FileGrid = () => {
   );
 };
 
-function ItemMenu({ onToggleStar, onTrash, onRename, isStarred, onPreview }: { onToggleStar: () => void; onTrash: () => void; onRename: () => void; isStarred: boolean; onPreview?: () => void }) {
+interface ItemMenuProps {
+  onToggleStar: () => void;
+  onTrash: () => void;
+  onRename: () => void;
+  isStarred: boolean;
+  onDownload?: () => void;
+  onRestore?: () => void;
+  onDelete?: () => void;
+  isTrashView?: boolean;
+}
+
+function ItemMenu({ onToggleStar, onTrash, onRename, isStarred, onDownload, onRestore, onDelete, isTrashView }: ItemMenuProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -133,30 +208,49 @@ function ItemMenu({ onToggleStar, onTrash, onRename, isStarred, onPreview }: { o
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-44">
-        {onPreview && (
-          <DropdownMenuItem onClick={onPreview}>
-            <Eye className="h-4 w-4 mr-2" />
-            Open
-          </DropdownMenuItem>
+        {isTrashView ? (
+          <>
+            {onRestore && (
+              <DropdownMenuItem onClick={onRestore}>
+                <RotateCcw className="h-4 w-4 mr-2" />
+                Restore
+              </DropdownMenuItem>
+            )}
+            {onDelete && (
+              <DropdownMenuItem onClick={onDelete} className="text-destructive">
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete forever
+              </DropdownMenuItem>
+            )}
+          </>
+        ) : (
+          <>
+            {onDownload && (
+              <DropdownMenuItem onClick={onDownload}>
+                <Download className="h-4 w-4 mr-2" />
+                Download
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuItem onClick={onRename}>
+              <Pencil className="h-4 w-4 mr-2" />
+              Rename
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onToggleStar}>
+              <Star className={`h-4 w-4 mr-2 ${isStarred ? 'fill-warning text-warning' : ''}`} />
+              {isStarred ? 'Unstar' : 'Star'}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onTrash} className="text-destructive">
+              <Trash2 className="h-4 w-4 mr-2" />
+              Move to trash
+            </DropdownMenuItem>
+          </>
         )}
-        <DropdownMenuItem onClick={onRename}>
-          <Pencil className="h-4 w-4 mr-2" />
-          Rename
-        </DropdownMenuItem>
-        <DropdownMenuItem onClick={onToggleStar}>
-          <Star className={`h-4 w-4 mr-2 ${isStarred ? 'fill-warning text-warning' : ''}`} />
-          {isStarred ? 'Unstar' : 'Star'}
-        </DropdownMenuItem>
-        <DropdownMenuItem onClick={onTrash} className="text-destructive">
-          <Trash2 className="h-4 w-4 mr-2" />
-          Move to trash
-        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
 
-function FolderGridItem({ folder, onOpen, onToggleStar, onTrash, onRename }: { folder: FolderItem; onOpen: () => void; onToggleStar: () => void; onTrash: () => void; onRename: () => void }) {
+function FolderGridItem({ folder, onOpen, onToggleStar, onTrash, onRename, onRestore, onDelete, isTrashView }: { folder: FolderItem; onOpen: () => void; onToggleStar: () => void; onTrash: () => void; onRename: () => void; onRestore: () => void; onDelete: () => void; isTrashView: boolean }) {
   return (
     <motion.div
       variants={item}
@@ -166,17 +260,17 @@ function FolderGridItem({ folder, onOpen, onToggleStar, onTrash, onRename }: { f
       <FolderIcon className="h-5 w-5 shrink-0" />
       <span className="text-sm font-medium truncate flex-1">{folder.name}</span>
       <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-        <ItemMenu onToggleStar={onToggleStar} onTrash={onTrash} onRename={onRename} isStarred={folder.is_starred} />
+        <ItemMenu onToggleStar={onToggleStar} onTrash={onTrash} onRename={onRename} isStarred={folder.is_starred} onRestore={onRestore} onDelete={onDelete} isTrashView={isTrashView} />
       </div>
     </motion.div>
   );
 }
 
-function FileGridItem({ file, onToggleStar, onTrash, onRename, onPreview }: { file: FileItem; onToggleStar: () => void; onTrash: () => void; onRename: () => void; onPreview: () => void }) {
+function FileGridItem({ file, onToggleStar, onTrash, onRename, onPreview, onDownload, onRestore, onDelete, isTrashView }: { file: FileItem; onToggleStar: () => void; onTrash: () => void; onRename: () => void; onPreview: () => void; onDownload: () => void; onRestore: () => void; onDelete: () => void; isTrashView: boolean }) {
   return (
     <motion.div
       variants={item}
-      onClick={onPreview}
+      onClick={isTrashView ? undefined : onPreview}
       className="group flex flex-col rounded-lg bg-surface hover:bg-surface-hover cursor-pointer transition-all drive-shadow hover:drive-shadow-hover overflow-hidden"
     >
       <div className="h-28 flex items-center justify-center bg-surface">
@@ -188,14 +282,14 @@ function FileGridItem({ file, onToggleStar, onTrash, onRename, onPreview }: { fi
           <p className="text-xs text-muted-foreground">{formatSize(file.size)}</p>
         </div>
         <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-          <ItemMenu onToggleStar={onToggleStar} onTrash={onTrash} onRename={onRename} isStarred={file.is_starred} onPreview={onPreview} />
+          <ItemMenu onToggleStar={onToggleStar} onTrash={onTrash} onRename={onRename} isStarred={file.is_starred} onDownload={onDownload} onRestore={onRestore} onDelete={onDelete} isTrashView={isTrashView} />
         </div>
       </div>
     </motion.div>
   );
 }
 
-function FolderListItem({ folder, onOpen, onToggleStar, onTrash, onRename }: { folder: FolderItem; onOpen: () => void; onToggleStar: () => void; onTrash: () => void; onRename: () => void }) {
+function FolderListItem({ folder, onOpen, onToggleStar, onTrash, onRename, onRestore, onDelete, isTrashView }: { folder: FolderItem; onOpen: () => void; onToggleStar: () => void; onTrash: () => void; onRename: () => void; onRestore: () => void; onDelete: () => void; isTrashView: boolean }) {
   return (
     <motion.div
       variants={item}
@@ -206,17 +300,17 @@ function FolderListItem({ folder, onOpen, onToggleStar, onTrash, onRename }: { f
       <span className="text-sm font-medium flex-1 truncate">{folder.name}</span>
       <span className="text-xs text-muted-foreground shrink-0">{formatDate(folder.created_at)}</span>
       <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-        <ItemMenu onToggleStar={onToggleStar} onTrash={onTrash} onRename={onRename} isStarred={folder.is_starred} />
+        <ItemMenu onToggleStar={onToggleStar} onTrash={onTrash} onRename={onRename} isStarred={folder.is_starred} onRestore={onRestore} onDelete={onDelete} isTrashView={isTrashView} />
       </div>
     </motion.div>
   );
 }
 
-function FileListItem({ file, onToggleStar, onTrash, onRename, onPreview }: { file: FileItem; onToggleStar: () => void; onTrash: () => void; onRename: () => void; onPreview: () => void }) {
+function FileListItem({ file, onToggleStar, onTrash, onRename, onPreview, onDownload, onRestore, onDelete, isTrashView }: { file: FileItem; onToggleStar: () => void; onTrash: () => void; onRename: () => void; onPreview: () => void; onDownload: () => void; onRestore: () => void; onDelete: () => void; isTrashView: boolean }) {
   return (
     <motion.div
       variants={item}
-      onClick={onPreview}
+      onClick={isTrashView ? undefined : onPreview}
       className="group flex items-center gap-3 py-2.5 px-3 rounded-lg hover:bg-surface-hover cursor-pointer transition-colors"
     >
       <FileIcon mimeType={file.mime_type} className="h-5 w-5 shrink-0" />
@@ -224,7 +318,7 @@ function FileListItem({ file, onToggleStar, onTrash, onRename, onPreview }: { fi
       <span className="text-xs text-muted-foreground shrink-0 hidden sm:block">{formatSize(file.size)}</span>
       <span className="text-xs text-muted-foreground shrink-0">{formatDate(file.created_at)}</span>
       <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-        <ItemMenu onToggleStar={onToggleStar} onTrash={onTrash} onRename={onRename} isStarred={file.is_starred} onPreview={onPreview} />
+        <ItemMenu onToggleStar={onToggleStar} onTrash={onTrash} onRename={onRename} isStarred={file.is_starred} onDownload={onDownload} onRestore={onRestore} onDelete={onDelete} isTrashView={isTrashView} />
       </div>
     </motion.div>
   );

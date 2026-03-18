@@ -4,11 +4,34 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/integrations/supabase/client';
 import { useDriveStore } from '@/stores/driveStore';
 import { useAuthStore } from '@/stores/authStore';
-import { encryptData, encryptString } from '@/lib/encryption';
+import { encryptData } from '@/lib/encryption';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+
+// Safe base64 encoding that avoids call stack overflow
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 8192;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+    for (let j = 0; j < chunk.length; j++) {
+      binary += String.fromCharCode(chunk[j]);
+    }
+  }
+  return btoa(binary);
+}
+
+// Hash filename for Telegram channel using SHA-256
+async function hashFileName(name: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(name + Date.now().toString());
+  const hash = await crypto.subtle.digest('SHA-256', data);
+  const bytes = new Uint8Array(hash);
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+}
 
 export const NewButton = () => {
   const [open, setOpen] = useState(false);
@@ -52,7 +75,6 @@ export const NewButton = () => {
       setUploadProgress(tempId, 0);
 
       try {
-        // Read file
         const buffer = await file.arrayBuffer();
         setUploadProgress(tempId, 20);
 
@@ -60,24 +82,17 @@ export const NewButton = () => {
         const { encrypted, iv } = await encryptData(buffer, user.id, profile.encryption_salt);
         setUploadProgress(tempId, 50);
 
-        // Encrypt filename
-        const encryptedName = await encryptString(file.name, user.id, profile.encryption_salt);
+        // Hash filename for Telegram channel privacy
+        const hashedName = await hashFileName(file.name);
         setUploadProgress(tempId, 60);
 
-        // Upload via edge function
-        // Convert to base64 in chunks to avoid call stack overflow
-        const bytes = new Uint8Array(encrypted);
-        let binary = '';
-        const chunkSize = 8192;
-        for (let i = 0; i < bytes.length; i += chunkSize) {
-          binary += String.fromCharCode(...bytes.slice(i, i + chunkSize));
-        }
-        const base64Data = btoa(binary);
+        // Convert encrypted data to base64 safely
+        const base64Data = arrayBufferToBase64(encrypted);
         
         const { data: uploadData, error: uploadError } = await supabase.functions.invoke('telegram-upload', {
           body: {
             fileData: base64Data,
-            fileName: `${tempId}.enc`,
+            fileName: `${hashedName}.enc`,
             mimeType: 'application/octet-stream',
           },
         });
@@ -85,10 +100,9 @@ export const NewButton = () => {
         if (uploadError) throw uploadError;
         setUploadProgress(tempId, 80);
 
-        // Store metadata
         const { error: dbError } = await supabase.from('files').insert({
           user_id: user.id,
-          name: encryptedName.encrypted,
+          name: hashedName,
           original_name: file.name,
           mime_type: file.type,
           size: file.size,
@@ -106,7 +120,7 @@ export const NewButton = () => {
         console.error('Upload failed:', err);
         toast.error(`Failed to upload ${file.name}`);
       } finally {
-        setTimeout(() => removeUploadProgress(tempId), 1000);
+        setTimeout(() => removeUploadProgress(tempId), 1500);
       }
     }
 
@@ -118,7 +132,6 @@ export const NewButton = () => {
     <>
       <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileUpload} />
 
-      {/* FAB */}
       <motion.button
         whileTap={{ scale: 0.95 }}
         onClick={() => setOpen(!open)}
@@ -128,7 +141,6 @@ export const NewButton = () => {
         <span className="font-medium text-sm">New</span>
       </motion.button>
 
-      {/* Menu */}
       <AnimatePresence>
         {open && (
           <>
@@ -164,7 +176,6 @@ export const NewButton = () => {
         )}
       </AnimatePresence>
 
-      {/* New Folder Dialog */}
       <Dialog open={folderDialog} onOpenChange={setFolderDialog}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
