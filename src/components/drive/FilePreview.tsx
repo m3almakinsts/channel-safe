@@ -5,6 +5,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuthStore } from '@/stores/authStore';
 import { decryptData } from '@/lib/encryption';
 import { Button } from '@/components/ui/button';
+import { Progress } from '@/components/ui/progress';
 import { toast } from 'sonner';
 import type { FileItem } from '@/stores/driveStore';
 
@@ -16,9 +17,10 @@ interface FilePreviewProps {
 export const FilePreview = ({ file, onClose }: FilePreviewProps) => {
   const [loading, setLoading] = useState(false);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [progress, setProgress] = useState(0);
+  const [statusText, setStatusText] = useState('');
   const { user, profile } = useAuthStore();
 
-  // Auto-load when file changes
   useEffect(() => {
     if (file && !blobUrl && !loading) {
       loadFile();
@@ -34,25 +36,25 @@ export const FilePreview = ({ file, onClose }: FilePreviewProps) => {
 
   const canPreview = (mimeType: string | null) => {
     if (!mimeType) return false;
-    return (
-      mimeType.startsWith('image/') ||
-      mimeType === 'application/pdf' ||
-      mimeType.startsWith('text/') ||
-      mimeType.startsWith('video/') ||
-      mimeType.startsWith('audio/')
-    );
+    return mimeType.startsWith('image/') || mimeType === 'application/pdf' || mimeType.startsWith('text/') || mimeType.startsWith('video/') || mimeType.startsWith('audio/');
   };
 
   const loadFile = async (): Promise<string | null> => {
     if (!file || !user || !profile?.encryption_salt || !file.telegram_file_id) return null;
 
     setLoading(true);
+    setProgress(0);
+    setStatusText('Downloading...');
     try {
+      setProgress(10);
       const { data, error } = await supabase.functions.invoke('telegram-download', {
         body: { fileId: file.telegram_file_id },
       });
 
       if (error || !data?.fileData) throw error || new Error('No data returned');
+
+      setProgress(50);
+      setStatusText('Decrypting...');
 
       const binaryString = atob(data.fileData);
       const bytes = new Uint8Array(binaryString.length);
@@ -60,16 +62,16 @@ export const FilePreview = ({ file, onClose }: FilePreviewProps) => {
         bytes[i] = binaryString.charCodeAt(i);
       }
 
-      const decrypted = await decryptData(
-        bytes.buffer,
-        file.encryption_iv!,
-        user.id,
-        profile.encryption_salt
-      );
+      setProgress(70);
+      const decrypted = await decryptData(bytes.buffer, file.encryption_iv!, user.id, profile.encryption_salt);
+
+      setProgress(90);
+      setStatusText('Preparing...');
 
       const blob = new Blob([decrypted], { type: file.mime_type || 'application/octet-stream' });
       const url = URL.createObjectURL(blob);
       setBlobUrl(url);
+      setProgress(100);
       return url;
     } catch (err) {
       console.error('Preview error:', err);
@@ -83,16 +85,18 @@ export const FilePreview = ({ file, onClose }: FilePreviewProps) => {
   const handleDownload = async () => {
     const url = blobUrl || await loadFile();
     if (!url || !file) return;
-
     const a = document.createElement('a');
     a.href = url;
     a.download = file.original_name || file.name;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
   };
 
   const handleClose = () => {
     if (blobUrl) URL.revokeObjectURL(blobUrl);
     setBlobUrl(null);
+    setProgress(0);
     onClose();
   };
 
@@ -106,32 +110,57 @@ export const FilePreview = ({ file, onClose }: FilePreviewProps) => {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex flex-col"
+        className="fixed inset-0 z-50 bg-background/95 backdrop-blur-md flex flex-col"
+        onClick={handleClose}
       >
-        <div className="flex items-center justify-between px-4 py-3 border-b bg-card">
+        {/* Header */}
+        <motion.div
+          initial={{ y: -20, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          className="flex items-center justify-between px-4 py-3 border-b bg-card/80 backdrop-blur-sm"
+          onClick={e => e.stopPropagation()}
+        >
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium truncate">{file.original_name || file.name}</p>
             <p className="text-xs text-muted-foreground">{file.mime_type}</p>
           </div>
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="icon" onClick={handleDownload} disabled={loading}>
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="icon" onClick={handleDownload} disabled={loading} className="h-9 w-9">
               <Download className="h-4 w-4" />
             </Button>
-            <Button variant="ghost" size="icon" onClick={handleClose}>
+            <Button variant="ghost" size="icon" onClick={handleClose} className="h-9 w-9">
               <X className="h-4 w-4" />
             </Button>
           </div>
-        </div>
+        </motion.div>
 
-        <div className="flex-1 flex items-center justify-center p-4 overflow-auto">
-          {loading ? (
-            <div className="flex flex-col items-center gap-3 text-muted-foreground">
-              <Loader2 className="h-8 w-8 animate-spin" />
-              <p className="text-sm">Decrypting file...</p>
-            </div>
-          ) : blobUrl && previewable ? (
+        {/* Loading state - compact card, not full screen */}
+        {loading && (
+          <div className="flex-1 flex items-center justify-center p-4" onClick={e => e.stopPropagation()}>
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="bg-card rounded-2xl p-6 drive-shadow-lg border w-full max-w-xs text-center space-y-4"
+            >
+              <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto" />
+              <div className="space-y-2">
+                <p className="text-sm font-medium">{statusText}</p>
+                <Progress value={progress} className="h-1.5" />
+                <p className="text-xs text-muted-foreground">{Math.round(progress)}%</p>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Content */}
+        {!loading && blobUrl && previewable && (
+          <div className="flex-1 flex items-center justify-center p-4 overflow-auto" onClick={e => e.stopPropagation()}>
             <PreviewContent mimeType={file.mime_type} url={blobUrl} />
-          ) : blobUrl && !previewable ? (
+          </div>
+        )}
+
+        {!loading && blobUrl && !previewable && (
+          <div className="flex-1 flex items-center justify-center p-4" onClick={e => e.stopPropagation()}>
             <div className="flex flex-col items-center gap-4 text-center">
               <p className="text-muted-foreground text-sm">This file type cannot be previewed</p>
               <Button variant="outline" onClick={handleDownload}>
@@ -139,8 +168,8 @@ export const FilePreview = ({ file, onClose }: FilePreviewProps) => {
                 Download
               </Button>
             </div>
-          ) : null}
-        </div>
+          </div>
+        )}
       </motion.div>
     </AnimatePresence>
   );
