@@ -63,8 +63,8 @@ export const SelectionBar = () => {
     }
 
     const promises: Promise<any>[] = [];
-    selectedFileIds.forEach(id => promises.push(supabase.from('files').delete().eq('id', id)));
-    selectedFolderIds.forEach(id => promises.push(supabase.from('folders').delete().eq('id', id)));
+    selectedFileIds.forEach(id => promises.push(supabase.from('files').delete().eq('id', id).then()));
+    selectedFolderIds.forEach(id => promises.push(supabase.from('folders').delete().eq('id', id).then()));
     await Promise.all(promises);
     toast.success('Permanently deleted');
     clearSelection();
