@@ -12,17 +12,14 @@ import { generateSalt } from '@/lib/encryption';
 import { motion } from 'framer-motion';
 
 const Dashboard = () => {
-  const { fetchContents, currentFolderId, setActiveView, activeView } = useDriveStore();
+  const { fetchContents, currentFolderId, setActiveView, activeView, clearSelection } = useDriveStore();
   const { user, profile, fetchProfile } = useAuthStore();
 
   useEffect(() => {
     const initSalt = async () => {
       if (user && profile && !profile.encryption_salt) {
         const salt = generateSalt();
-        await supabase
-          .from('profiles')
-          .update({ encryption_salt: salt })
-          .eq('user_id', user.id);
+        await supabase.from('profiles').update({ encryption_salt: salt }).eq('user_id', user.id);
         await fetchProfile();
       }
     };
@@ -34,21 +31,18 @@ const Dashboard = () => {
   }, [currentFolderId, fetchContents]);
 
   const handleViewChange = useCallback((view: string) => {
+    clearSelection();
     setActiveView(view as 'drive' | 'starred' | 'recent' | 'trash');
-  }, [setActiveView]);
+  }, [setActiveView, clearSelection]);
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      className="min-h-screen flex flex-col bg-background"
-    >
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="min-h-screen flex flex-col bg-background">
       <DriveHeader activeView={activeView} onViewChange={handleViewChange} />
       <div className="px-4 pt-2">
         <Breadcrumbs />
       </div>
       <DriveToolbar />
-      <div className="flex-1 overflow-y-auto py-4">
+      <div className="flex-1 overflow-y-auto py-4 pb-24">
         <FileGrid />
       </div>
       {activeView === 'drive' && <NewButton />}
