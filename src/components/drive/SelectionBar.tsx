@@ -39,8 +39,8 @@ export const SelectionBar = () => {
 
   const batchRestore = async () => {
     const promises: Promise<any>[] = [];
-    selectedFileIds.forEach(id => promises.push(supabase.from('files').update({ is_trashed: false, trashed_at: null }).eq('id', id)));
-    selectedFolderIds.forEach(id => promises.push(supabase.from('folders').update({ is_trashed: false, trashed_at: null }).eq('id', id)));
+    selectedFileIds.forEach(id => promises.push(supabase.from('files').update({ is_trashed: false, trashed_at: null }).eq('id', id).then()));
+    selectedFolderIds.forEach(id => promises.push(supabase.from('folders').update({ is_trashed: false, trashed_at: null }).eq('id', id).then()));
     await Promise.all(promises);
     toast.success('Restored');
     clearSelection();
