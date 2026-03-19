@@ -62,7 +62,7 @@ export const SelectionBar = () => {
       }
     }
 
-    const promises: Promise<any>[] = [];
+    const promises: PromiseLike<any>[] = [];
     selectedFileIds.forEach(id => promises.push(supabase.from('files').delete().eq('id', id).then()));
     selectedFolderIds.forEach(id => promises.push(supabase.from('folders').delete().eq('id', id).then()));
     await Promise.all(promises);
