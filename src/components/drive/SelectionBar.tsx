@@ -28,7 +28,7 @@ export const SelectionBar = () => {
 
   const batchTrash = async () => {
     const now = new Date().toISOString();
-    const promises: Promise<any>[] = [];
+    const promises: PromiseLike<any>[] = [];
     selectedFileIds.forEach(id => promises.push(supabase.from('files').update({ is_trashed: true, trashed_at: now }).eq('id', id).then()));
     selectedFolderIds.forEach(id => promises.push(supabase.from('folders').update({ is_trashed: true, trashed_at: now }).eq('id', id).then()));
     await Promise.all(promises);
