@@ -17,7 +17,7 @@ export const SelectionBar = () => {
   const isTrashView = activeView === 'trash';
 
   const batchStar = async (star: boolean) => {
-    const promises: Promise<any>[] = [];
+    const promises: PromiseLike<any>[] = [];
     selectedFileIds.forEach(id => promises.push(supabase.from('files').update({ is_starred: star }).eq('id', id).then()));
     selectedFolderIds.forEach(id => promises.push(supabase.from('folders').update({ is_starred: star }).eq('id', id).then()));
     await Promise.all(promises);
