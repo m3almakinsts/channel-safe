@@ -159,6 +159,47 @@ export type Database = {
         }
         Relationships: []
       }
+      shared_links: {
+        Row: {
+          created_at: string
+          encryption_iv: string
+          encryption_key: string
+          expires_at: string | null
+          file_id: string
+          id: string
+          token: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          encryption_iv: string
+          encryption_key: string
+          expires_at?: string | null
+          file_id: string
+          id?: string
+          token: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          encryption_iv?: string
+          encryption_key?: string
+          expires_at?: string | null
+          file_id?: string
+          id?: string
+          token?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "shared_links_file_id_fkey"
+            columns: ["file_id"]
+            isOneToOne: false
+            referencedRelation: "files"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never

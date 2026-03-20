@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, lazy, Suspense } from 'react';
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Route, Routes, Navigate } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
@@ -10,6 +10,8 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import SettingsPage from './pages/SettingsPage';
 import NotFound from './pages/NotFound';
+
+const SharePage = lazy(() => import('./pages/SharePage'));
 
 const queryClient = new QueryClient();
 
@@ -71,6 +73,7 @@ const App = () => (
             <Route path="/login" element={<Login />} />
             <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+            <Route path="/share/:token" element={<Suspense fallback={<div className="min-h-screen flex items-center justify-center"><span className="text-muted-foreground">Loading...</span></div>}><SharePage /></Suspense>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>

@@ -11,7 +11,6 @@ Deno.serve(async (req) => {
   }
 
   try {
-    // Verify auth
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey, {
@@ -45,17 +44,13 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Convert base64 to binary
-    const binaryString = atob(fileData);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
+    // Optimized base64 decoding using Deno's built-in
+    const binaryData = Uint8Array.from(atob(fileData), c => c.charCodeAt(0));
 
     // Upload to Telegram
     const formData = new FormData();
     formData.append('chat_id', TELEGRAM_CHANNEL_ID);
-    formData.append('document', new Blob([bytes], { type: mimeType || 'application/octet-stream' }), fileName);
+    formData.append('document', new Blob([binaryData], { type: mimeType || 'application/octet-stream' }), fileName);
 
     const telegramRes = await fetch(
       `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument`,
