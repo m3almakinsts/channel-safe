@@ -11,6 +11,8 @@ import Dashboard from './pages/Dashboard';
 import SettingsPage from './pages/SettingsPage';
 import NotFound from './pages/NotFound';
 
+const SharePage = lazy(() => import('./pages/SharePage'));
+
 const queryClient = new QueryClient();
 
 function AuthProvider({ children }: { children: React.ReactNode }) {
