@@ -73,6 +73,7 @@ const App = () => (
             <Route path="/login" element={<Login />} />
             <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+            <Route path="/share/:token" element={<Suspense fallback={<div className="min-h-screen flex items-center justify-center"><span className="text-muted-foreground">Loading...</span></div>}><SharePage /></Suspense>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>
