@@ -28,7 +28,6 @@ function formatDate(date: string): string {
 const container = { hidden: {}, show: { transition: { staggerChildren: 0.03 } } };
 const itemAnim = { hidden: { opacity: 0, y: 8 }, show: { opacity: 1, y: 0 } };
 
-// iOS-style shake keyframes via inline style
 const shakeAnimation = {
   rotate: [0, -1.5, 1.5, -1, 1, 0],
   transition: { duration: 0.4, repeat: Infinity, repeatDelay: 0.1 },
@@ -70,22 +69,18 @@ export const FileGrid = () => {
     return sortOrder === 'asc' ? cmp : -cmp;
   });
 
-  // No decryption needed for starring - just a DB flag toggle
   const toggleStar = async (type: 'files' | 'folders', id: string, current: boolean) => {
     await supabase.from(type).update({ is_starred: !current }).eq('id', id);
     fetchContents(currentFolderId);
   };
 
-  // No decryption needed for trashing - just a DB flag toggle
   const moveToTrash = async (type: 'files' | 'folders', id: string) => {
     await supabase.from(type).update({ is_trashed: true, trashed_at: new Date().toISOString() }).eq('id', id);
-    toast.success('Moved to trash');
     fetchContents(currentFolderId);
   };
 
   const restoreFromTrash = async (type: 'files' | 'folders', id: string) => {
     await supabase.from(type).update({ is_trashed: false, trashed_at: null }).eq('id', id);
-    toast.success('Restored');
     fetchContents(currentFolderId);
   };
 
@@ -99,16 +94,11 @@ export const FileGrid = () => {
       }
     }
     await supabase.from(type).delete().eq('id', id);
-    toast.success('Permanently deleted');
     fetchContents(currentFolderId);
   };
 
   const downloadFile = async (file: FileItem) => {
-    if (!user || !profile?.encryption_salt || !file.telegram_file_id) {
-      toast.error('Cannot download this file');
-      return;
-    }
-    const toastId = toast.loading(`Downloading ${file.original_name || file.name}...`);
+    if (!user || !profile?.encryption_salt || !file.telegram_file_id) return;
     try {
       const { data, error } = await supabase.functions.invoke('telegram-download', { body: { fileId: file.telegram_file_id } });
       if (error || !data?.fileData) throw error || new Error('No data');
@@ -127,10 +117,9 @@ export const FileGrid = () => {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      toast.success('Downloaded', { id: toastId });
     } catch (err) {
       console.error('Download error:', err);
-      toast.error('Download failed', { id: toastId });
+      toast.error('Download failed');
     }
   };
 
@@ -139,9 +128,7 @@ export const FileGrid = () => {
       toast.error('Cannot share this file');
       return;
     }
-    const toastId = toast.loading('Creating share link...');
     try {
-      // Generate share token and export encryption key for the URL hash
       const token = crypto.randomUUID();
       const { error } = await supabase.from('shared_links').insert({
         file_id: file.id,
@@ -153,25 +140,11 @@ export const FileGrid = () => {
       if (error) throw error;
 
       const shareUrl = `${window.location.origin}/share/${token}#${btoa(`${user.id}:${profile.encryption_salt}`)}`;
-      
-      // Try Web Share API first (works on mobile)
-      if (navigator.share) {
-        await navigator.share({
-          title: file.original_name || file.name,
-          text: `Shared file: ${file.original_name || file.name}`,
-          url: shareUrl,
-        });
-      } else {
-        await navigator.clipboard.writeText(shareUrl);
-      }
-      toast.success('Share link copied!', { id: toastId });
+      await navigator.clipboard.writeText(shareUrl);
+      toast.success('Share link copied to clipboard');
     } catch (err: any) {
-      if (err?.name === 'AbortError') {
-        toast.dismiss(toastId);
-        return;
-      }
       console.error('Share error:', err);
-      toast.error('Failed to create share link', { id: toastId });
+      toast.error('Failed to create share link');
     }
   };
 
@@ -246,8 +219,6 @@ export const FileGrid = () => {
   );
 };
 
-// --- Shared types ---
-
 interface ItemMenuProps {
   onToggleStar: () => void;
   onTrash: () => void;
@@ -288,8 +259,6 @@ function ItemMenu({ onToggleStar, onTrash, onRename, isStarred, onDownload, onSh
   );
 }
 
-// --- Selection checkbox ---
-
 function SelectionCheck({ selected }: { selected: boolean }) {
   return (
     <motion.div
@@ -301,8 +270,6 @@ function SelectionCheck({ selected }: { selected: boolean }) {
     </motion.div>
   );
 }
-
-// --- Grid/List items ---
 
 interface FolderItemProps { folder: FolderItem; selected: boolean; isSelecting: boolean; shake: boolean; onOpen: () => void; onToggleStar: () => void; onTrash: () => void; onRename: () => void; onRestore: () => void; onDelete: () => void; isTrashView: boolean }
 
@@ -318,7 +285,7 @@ function FolderGridItem({ folder, selected, isSelecting, shake, onOpen, onToggle
       <FolderIcon className="h-5 w-5 shrink-0" />
       <span className="text-sm font-medium truncate flex-1">{folder.name}</span>
       {!isSelecting && (
-        <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
           <ItemMenu onToggleStar={onToggleStar} onTrash={onTrash} onRename={onRename} isStarred={folder.is_starred} onRestore={onRestore} onDelete={onDelete} isTrashView={isTrashView} />
         </div>
       )}
@@ -350,7 +317,7 @@ function FileGridItem({ file, selected, isSelecting, shake, onToggleStar, onTras
           <p className="text-xs text-muted-foreground">{formatSize(file.size)}</p>
         </div>
         {!isSelecting && (
-          <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
             <ItemMenu onToggleStar={onToggleStar} onTrash={onTrash} onRename={onRename} isStarred={file.is_starred} onDownload={onDownload} onShare={onShare} onRestore={onRestore} onDelete={onDelete} isTrashView={isTrashView} />
           </div>
         )}
@@ -367,7 +334,7 @@ function FolderListItem({ folder, selected, isSelecting, shake, onOpen, onToggle
       <span className="text-sm font-medium flex-1 truncate">{folder.name}</span>
       <span className="text-xs text-muted-foreground shrink-0">{formatDate(folder.created_at)}</span>
       {!isSelecting && (
-        <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
           <ItemMenu onToggleStar={onToggleStar} onTrash={onTrash} onRename={onRename} isStarred={folder.is_starred} onRestore={onRestore} onDelete={onDelete} isTrashView={isTrashView} />
         </div>
       )}
@@ -384,7 +351,7 @@ function FileListItem({ file, selected, isSelecting, shake, onToggleStar, onTras
       <span className="text-xs text-muted-foreground shrink-0 hidden sm:block">{formatSize(file.size)}</span>
       <span className="text-xs text-muted-foreground shrink-0">{formatDate(file.created_at)}</span>
       {!isSelecting && (
-        <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
           <ItemMenu onToggleStar={onToggleStar} onTrash={onTrash} onRename={onRename} isStarred={file.is_starred} onDownload={onDownload} onShare={onShare} onRestore={onRestore} onDelete={onDelete} isTrashView={isTrashView} />
         </div>
       )}

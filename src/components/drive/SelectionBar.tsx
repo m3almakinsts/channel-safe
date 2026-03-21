@@ -1,9 +1,7 @@
-import { X, Star, Trash2, Download, RotateCcw, CheckSquare, Link2 } from 'lucide-react';
+import { X, Star, Trash2, Download, RotateCcw, CheckSquare, XSquare } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useDriveStore } from '@/stores/driveStore';
 import { supabase } from '@/integrations/supabase/client';
-import { useAuthStore } from '@/stores/authStore';
-import { decryptData } from '@/lib/encryption';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 
@@ -15,17 +13,15 @@ interface SelectionBarProps {
 
 export const SelectionBar = ({ onEnterSelectMode, onExitSelectMode, selectionMode }: SelectionBarProps) => {
   const { selectedFileIds, selectedFolderIds, clearSelection, files, folders, fetchContents, currentFolderId, activeView, selectAllFiles } = useDriveStore();
-  const { user, profile } = useAuthStore();
 
   const totalSelected = selectedFileIds.size + selectedFolderIds.size;
   const hasItems = files.length > 0 || folders.length > 0;
   const isTrashView = activeView === 'trash';
 
-  // Show "Select" button when not in selection mode and there are items
   if (!selectionMode && totalSelected === 0) {
-    if (!hasItems || isTrashView) return null;
+    if (!hasItems) return null;
     return (
-      <div className="fixed bottom-20 left-3 z-40">
+      <div className="fixed bottom-20 left-3 z-30">
         <motion.button
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
@@ -45,7 +41,6 @@ export const SelectionBar = ({ onEnterSelectMode, onExitSelectMode, selectionMod
     selectedFileIds.forEach(id => promises.push(supabase.from('files').update({ is_starred: star }).eq('id', id).then()));
     selectedFolderIds.forEach(id => promises.push(supabase.from('folders').update({ is_starred: star }).eq('id', id).then()));
     await Promise.all(promises);
-    toast.success(star ? 'Starred' : 'Unstarred');
     onExitSelectMode();
     fetchContents(currentFolderId);
   };
@@ -56,7 +51,6 @@ export const SelectionBar = ({ onEnterSelectMode, onExitSelectMode, selectionMod
     selectedFileIds.forEach(id => promises.push(supabase.from('files').update({ is_trashed: true, trashed_at: now }).eq('id', id).then()));
     selectedFolderIds.forEach(id => promises.push(supabase.from('folders').update({ is_trashed: true, trashed_at: now }).eq('id', id).then()));
     await Promise.all(promises);
-    toast.success(`Moved ${totalSelected} item${totalSelected > 1 ? 's' : ''} to trash`);
     onExitSelectMode();
     fetchContents(currentFolderId);
   };
@@ -66,7 +60,6 @@ export const SelectionBar = ({ onEnterSelectMode, onExitSelectMode, selectionMod
     selectedFileIds.forEach(id => promises.push(supabase.from('files').update({ is_trashed: false, trashed_at: null }).eq('id', id).then()));
     selectedFolderIds.forEach(id => promises.push(supabase.from('folders').update({ is_trashed: false, trashed_at: null }).eq('id', id).then()));
     await Promise.all(promises);
-    toast.success('Restored');
     onExitSelectMode();
     fetchContents(currentFolderId);
   };
@@ -84,17 +77,14 @@ export const SelectionBar = ({ onEnterSelectMode, onExitSelectMode, selectionMod
     selectedFileIds.forEach(id => promises.push(supabase.from('files').delete().eq('id', id).then()));
     selectedFolderIds.forEach(id => promises.push(supabase.from('folders').delete().eq('id', id).then()));
     await Promise.all(promises);
-    toast.success('Permanently deleted');
     onExitSelectMode();
     fetchContents(currentFolderId);
   };
 
   const batchDownload = async () => {
-    if (!user || !profile?.encryption_salt) return;
     const selectedFiles = files.filter(f => selectedFileIds.has(f.id));
-    const toastId = toast.loading(`Downloading ${selectedFiles.length} files...`);
+    if (selectedFiles.length === 0) return;
 
-    let downloaded = 0;
     for (const file of selectedFiles) {
       if (!file.telegram_file_id) continue;
       try {
@@ -105,18 +95,26 @@ export const SelectionBar = ({ onEnterSelectMode, onExitSelectMode, selectionMod
         const bytes = new Uint8Array(binaryString.length);
         for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
 
+        // For multi-download we need decryption - import inline
+        const { decryptData } = await import('@/lib/encryption');
+        const { useAuthStore } = await import('@/stores/authStore');
+        const { user, profile } = useAuthStore.getState();
+        if (!user || !profile?.encryption_salt) continue;
+
         const decrypted = await decryptData(bytes.buffer, file.encryption_iv!, user.id, profile.encryption_salt);
         const blob = new Blob([decrypted], { type: file.mime_type || 'application/octet-stream' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
         a.download = file.original_name || file.name;
+        document.body.appendChild(a);
         a.click();
+        document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        downloaded++;
+        // Small delay between downloads so browser doesn't block them
+        await new Promise(r => setTimeout(r, 500));
       } catch (err) { console.error('Download error:', err); }
     }
-    toast.success(`Downloaded ${downloaded} file${downloaded !== 1 ? 's' : ''}`, { id: toastId });
     onExitSelectMode();
   };
 
@@ -137,6 +135,11 @@ export const SelectionBar = ({ onEnterSelectMode, onExitSelectMode, selectionMod
               <span className="text-sm font-medium">{totalSelected > 0 ? `${totalSelected} selected` : 'Select items'}</span>
             </div>
             <div className="flex items-center gap-1">
+              {totalSelected > 0 && (
+                <Button variant="ghost" size="icon" onClick={() => clearSelection()} className="text-primary-foreground hover:bg-primary-foreground/20 h-9 w-9" title="Unselect all">
+                  <XSquare className="h-4 w-4" />
+                </Button>
+              )}
               {totalSelected === 0 ? (
                 <Button variant="ghost" size="sm" onClick={selectAllFiles} className="text-primary-foreground hover:bg-primary-foreground/20 text-xs">
                   Select all

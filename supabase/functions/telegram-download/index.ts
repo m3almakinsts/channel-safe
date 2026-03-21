@@ -13,17 +13,15 @@ Deno.serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY')!;
+
+    // Allow both authenticated users and anonymous access (for shared links)
+    const authHeader = req.headers.get('Authorization');
     const supabase = createClient(supabaseUrl, supabaseKey, {
-      global: { headers: { Authorization: req.headers.get('Authorization')! } },
+      global: { headers: authHeader ? { Authorization: authHeader } : {} },
     });
 
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
+    // Try to get user but don't require it (shared links are anonymous)
+    const { data: { user } } = await supabase.auth.getUser();
 
     const TELEGRAM_BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN');
     if (!TELEGRAM_BOT_TOKEN) {
@@ -41,7 +39,6 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Get file path from Telegram
     const fileInfoRes = await fetch(
       `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`
     );
@@ -57,14 +54,19 @@ Deno.serve(async (req) => {
     const filePath = fileInfo.result.file_path;
     const downloadUrl = `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${filePath}`;
 
-    // Download file
     const fileRes = await fetch(downloadUrl);
     const fileBuffer = await fileRes.arrayBuffer();
 
-    // Return as base64
+    // Fast base64 encoding using chunks
     const bytes = new Uint8Array(fileBuffer);
+    const chunkSize = 32768;
     let binary = '';
-    bytes.forEach(b => binary += String.fromCharCode(b));
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+      for (let j = 0; j < chunk.length; j++) {
+        binary += String.fromCharCode(chunk[j]);
+      }
+    }
     const base64 = btoa(binary);
 
     return new Response(JSON.stringify({ success: true, fileData: base64 }), {
