@@ -38,8 +38,10 @@ export const NewButton = () => {
   const [folderDialog, setFolderDialog] = useState(false);
   const [folderName, setFolderName] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { currentFolderId, fetchContents, addUpload, updateUpload, removeUpload } = useDriveStore();
+  const { currentFolderId, fetchContents, addUpload, updateUpload, removeUpload, selectedFileIds, selectedFolderIds } = useDriveStore();
   const { user, profile } = useAuthStore();
+
+  const isSelecting = selectedFileIds.size > 0 || selectedFolderIds.size > 0;
 
   const createFolder = async () => {
     if (!folderName.trim() || !user) return;
@@ -49,7 +51,7 @@ export const NewButton = () => {
       parent_folder_id: currentFolderId,
     });
     if (error) toast.error('Failed to create folder');
-    else { toast.success('Folder created'); fetchContents(currentFolderId); }
+    else fetchContents(currentFolderId);
     setFolderName('');
     setFolderDialog(false);
     setOpen(false);
@@ -110,7 +112,6 @@ export const NewButton = () => {
     setOpen(false);
     const fileList = Array.from(files);
 
-    // Process in batches of MAX_CONCURRENT
     const queue = [...fileList];
     const active: Promise<void>[] = [];
 
@@ -135,6 +136,11 @@ export const NewButton = () => {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
+  // Hide New button when selection bar is visible
+  if (isSelecting) return (
+    <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileUpload} />
+  );
+
   return (
     <>
       <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileUpload} />
@@ -142,7 +148,7 @@ export const NewButton = () => {
       <motion.button
         whileTap={{ scale: 0.95 }}
         onClick={() => setOpen(!open)}
-        className="fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-2xl bg-primary px-5 py-3.5 text-primary-foreground drive-shadow-lg hover:drive-shadow-hover transition-shadow"
+        className="fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-2xl bg-primary px-5 py-3.5 text-primary-foreground drive-shadow-lg hover:drive-shadow-hover transition-shadow"
       >
         <Plus className={`h-5 w-5 transition-transform ${open ? 'rotate-45' : ''}`} />
         <span className="font-medium text-sm">New</span>

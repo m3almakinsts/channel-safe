@@ -21,13 +21,11 @@ const SharePage = () => {
     return () => {
       if (blobUrl) URL.revokeObjectURL(blobUrl);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   const loadSharedFile = async () => {
     if (!token) { setError('Invalid share link'); setLoading(false); return; }
 
-    // Get key material from URL hash
     const hash = window.location.hash.slice(1);
     if (!hash) { setError('Invalid share link - missing key'); setLoading(false); return; }
 
@@ -44,25 +42,29 @@ const SharePage = () => {
       setProgress(10);
       setStatusText('Looking up file...');
 
-      // Look up the shared link
       const { data: shareData, error: shareErr } = await supabase
         .from('shared_links')
-        .select('*, files(*)')
+        .select('*')
         .eq('token', token)
         .single();
 
       if (shareErr || !shareData) { setError('Share link not found or expired'); setLoading(false); return; }
       if (shareData.expires_at && new Date(shareData.expires_at) < new Date()) { setError('Share link has expired'); setLoading(false); return; }
 
-      const file = (shareData as any).files;
-      if (!file) { setError('File not found'); setLoading(false); return; }
+      // Fetch file separately
+      const { data: file, error: fileErr } = await supabase
+        .from('files')
+        .select('*')
+        .eq('id', shareData.file_id)
+        .single();
+
+      if (fileErr || !file) { setError('File not found'); setLoading(false); return; }
 
       setFileName(file.original_name || file.name);
       setMimeType(file.mime_type || '');
       setProgress(20);
       setStatusText('Downloading...');
 
-      // Download from Telegram
       const { data, error: dlErr } = await supabase.functions.invoke('telegram-download', {
         body: { fileId: file.telegram_file_id },
       });
@@ -75,7 +77,7 @@ const SharePage = () => {
       const bytes = new Uint8Array(binaryString.length);
       for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
 
-      const decrypted = await decryptData(bytes.buffer, file.encryption_iv, userId, salt);
+      const decrypted = await decryptData(bytes.buffer, file.encryption_iv!, userId, salt);
 
       setProgress(90);
       setStatusText('Preparing...');
@@ -105,6 +107,7 @@ const SharePage = () => {
   const isImage = mimeType.startsWith('image/');
   const isVideo = mimeType.startsWith('video/');
   const isAudio = mimeType.startsWith('audio/');
+  const isPdf = mimeType === 'application/pdf';
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -148,6 +151,7 @@ const SharePage = () => {
               {isImage && <img src={blobUrl} alt={fileName} className="w-full rounded-lg" />}
               {isVideo && <video src={blobUrl} controls className="w-full rounded-lg" />}
               {isAudio && <audio src={blobUrl} controls className="w-full" />}
+              {isPdf && <iframe src={blobUrl} className="w-full h-[70vh] rounded-lg border" title="PDF" />}
             </div>
           </div>
         )}
