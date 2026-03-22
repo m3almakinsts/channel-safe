@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { supabase } from '@/integrations/supabase/client';
 
+let latestFetchRequestId = 0;
+
 export interface FileItem {
   id: string;
   user_id: string;
@@ -39,7 +41,7 @@ export interface UploadItem {
   id: string;
   name: string;
   progress: number;
-  status: 'encrypting' | 'uploading' | 'saving' | 'done' | 'error';
+  status: 'encrypting' | 'uploading' | 'saving' | 'done' | 'error' | 'cancelled';
 }
 
 interface DriveState {
@@ -56,6 +58,8 @@ interface DriveState {
 
   // Upload tracking
   uploads: Map<string, UploadItem>;
+  uploadControllers: Map<string, AbortController>;
+  uploadCancelGeneration: number;
 
   // Selection
   selectedFileIds: Set<string>;
@@ -74,6 +78,10 @@ interface DriveState {
   addUpload: (item: UploadItem) => void;
   updateUpload: (id: string, update: Partial<UploadItem>) => void;
   removeUpload: (id: string) => void;
+  registerUploadController: (id: string, controller: AbortController) => void;
+  unregisterUploadController: (id: string) => void;
+  cancelUpload: (id: string) => void;
+  cancelAllUploads: () => void;
 
   // Legacy compat
   uploadProgress: Map<string, number>;
@@ -99,6 +107,8 @@ export const useDriveStore = create<DriveState>((set, get) => ({
   loading: false,
   activeView: 'drive',
   uploads: new Map(),
+  uploadControllers: new Map(),
+  uploadCancelGeneration: 0,
   uploadProgress: new Map(),
   selectedFileIds: new Set(),
   selectedFolderIds: new Set(),
@@ -121,34 +131,51 @@ export const useDriveStore = create<DriveState>((set, get) => ({
   },
 
   fetchContents: async (folderId) => {
+    const requestId = ++latestFetchRequestId;
     set({ loading: true });
+
     const targetFolder = folderId !== undefined ? folderId : get().currentFolderId;
     const view = get().activeView;
     const isTrashed = view === 'trash';
     const isRecent = view === 'recent';
+    const isStarred = view === 'starred';
 
-    const filesQuery = supabase.from('files').select('*').eq('is_trashed', isTrashed).order('created_at', { ascending: false });
-    const foldersQuery = supabase.from('folders').select('*').eq('is_trashed', isTrashed).order('name', { ascending: true });
+    try {
+      const filesQuery = supabase.from('files').select('*').eq('is_trashed', isTrashed).order('created_at', { ascending: false });
+      const foldersQuery = supabase.from('folders').select('*').eq('is_trashed', isTrashed).order('name', { ascending: true });
 
-    if (isRecent) {
-      filesQuery.gte('created_at', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString());
-    } else if (!isTrashed) {
-      if (targetFolder) {
-        filesQuery.eq('parent_folder_id', targetFolder);
-        foldersQuery.eq('parent_folder_id', targetFolder);
-      } else {
-        filesQuery.is('parent_folder_id', null);
-        foldersQuery.is('parent_folder_id', null);
+      if (isRecent) {
+        filesQuery.gte('created_at', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString());
+      } else if (isStarred) {
+        filesQuery.eq('is_starred', true);
+        foldersQuery.eq('is_starred', true);
+      } else if (!isTrashed) {
+        if (targetFolder) {
+          filesQuery.eq('parent_folder_id', targetFolder);
+          foldersQuery.eq('parent_folder_id', targetFolder);
+        } else {
+          filesQuery.is('parent_folder_id', null);
+          foldersQuery.is('parent_folder_id', null);
+        }
+      }
+
+      const [filesRes, foldersRes] = await Promise.all([filesQuery, foldersQuery]);
+
+      if (requestId !== latestFetchRequestId) {
+        return;
+      }
+
+      set({
+        files: (filesRes.data ?? []) as FileItem[],
+        folders: isRecent ? [] : (foldersRes.data ?? []) as FolderItem[],
+        loading: false,
+      });
+    } catch (error) {
+      console.error('Failed to fetch drive contents:', error);
+      if (requestId === latestFetchRequestId) {
+        set({ loading: false });
       }
     }
-
-    const [filesRes, foldersRes] = await Promise.all([filesQuery, foldersQuery]);
-
-    set({
-      files: (filesRes.data ?? []) as FileItem[],
-      folders: isRecent ? [] : (foldersRes.data ?? []) as FolderItem[],
-      loading: false,
-    });
   },
 
   fetchBreadcrumbs: async (folderId) => {
@@ -184,8 +211,67 @@ export const useDriveStore = create<DriveState>((set, get) => ({
   removeUpload: (id) => {
     set((state) => {
       const newMap = new Map(state.uploads);
+      const newControllers = new Map(state.uploadControllers);
       newMap.delete(id);
-      return { uploads: newMap };
+      newControllers.delete(id);
+      return { uploads: newMap, uploadControllers: newControllers };
+    });
+  },
+
+  registerUploadController: (id, controller) => {
+    set((state) => {
+      const newControllers = new Map(state.uploadControllers);
+      newControllers.set(id, controller);
+      return { uploadControllers: newControllers };
+    });
+  },
+
+  unregisterUploadController: (id) => {
+    set((state) => {
+      const newControllers = new Map(state.uploadControllers);
+      newControllers.delete(id);
+      return { uploadControllers: newControllers };
+    });
+  },
+
+  cancelUpload: (id) => {
+    set((state) => {
+      const newControllers = new Map(state.uploadControllers);
+      const controller = newControllers.get(id);
+      if (controller) {
+        controller.abort();
+      }
+      newControllers.delete(id);
+
+      const newUploads = new Map(state.uploads);
+      const upload = newUploads.get(id);
+      if (upload && upload.status !== 'done' && upload.status !== 'error') {
+        newUploads.set(id, { ...upload, status: 'cancelled', progress: 0 });
+      }
+
+      return {
+        uploadControllers: newControllers,
+        uploads: newUploads,
+      };
+    });
+  },
+
+  cancelAllUploads: () => {
+    set((state) => {
+      state.uploadControllers.forEach((controller) => controller.abort());
+
+      const newUploads = new Map(state.uploads);
+      newUploads.forEach((upload, id) => {
+        if (upload.status !== 'done' && upload.status !== 'error') {
+          newUploads.set(id, { ...upload, status: 'cancelled', progress: 0 });
+        }
+      });
+
+      return {
+        uploads: newUploads,
+        uploadControllers: new Map(),
+        uploadCancelGeneration: state.uploadCancelGeneration + 1,
+      };
     });
   },
 
