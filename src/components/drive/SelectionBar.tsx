@@ -1,7 +1,10 @@
 import { X, Star, Trash2, Download, RotateCcw, CheckSquare, XSquare } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useDriveStore } from '@/stores/driveStore';
+import { useAuthStore } from '@/stores/authStore';
 import { supabase } from '@/integrations/supabase/client';
+import { decryptData } from '@/lib/encryption';
+import { downloadEncryptedFromTelegram } from '@/lib/transfer';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 
@@ -13,6 +16,7 @@ interface SelectionBarProps {
 
 export const SelectionBar = ({ onEnterSelectMode, onExitSelectMode, selectionMode }: SelectionBarProps) => {
   const { selectedFileIds, selectedFolderIds, clearSelection, files, folders, fetchContents, currentFolderId, activeView, selectAllFiles } = useDriveStore();
+  const { user, profile } = useAuthStore();
 
   const totalSelected = selectedFileIds.size + selectedFolderIds.size;
   const hasItems = files.length > 0 || folders.length > 0;
@@ -83,39 +87,79 @@ export const SelectionBar = ({ onEnterSelectMode, onExitSelectMode, selectionMod
 
   const batchDownload = async () => {
     const selectedFiles = files.filter(f => selectedFileIds.has(f.id));
-    if (selectedFiles.length === 0) return;
+    if (!user || !profile?.encryption_salt || selectedFiles.length === 0) return;
 
-    for (const file of selectedFiles) {
-      if (!file.telegram_file_id) continue;
-      try {
-        const { data, error } = await supabase.functions.invoke('telegram-download', { body: { fileId: file.telegram_file_id } });
-        if (error || !data?.fileData) continue;
+    const triggerDownload = (blob: Blob, fileName: string) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    };
 
-        const binaryString = atob(data.fileData);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+    const resolveUniqueName = (baseName: string, usedNames: Set<string>) => {
+      if (!usedNames.has(baseName)) {
+        usedNames.add(baseName);
+        return baseName;
+      }
 
-        // For multi-download we need decryption - import inline
-        const { decryptData } = await import('@/lib/encryption');
-        const { useAuthStore } = await import('@/stores/authStore');
-        const { user, profile } = useAuthStore.getState();
-        if (!user || !profile?.encryption_salt) continue;
+      let index = 2;
+      const dotIndex = baseName.lastIndexOf('.');
+      const stem = dotIndex > 0 ? baseName.slice(0, dotIndex) : baseName;
+      const extension = dotIndex > 0 ? baseName.slice(dotIndex) : '';
+      let candidate = `${stem} (${index})${extension}`;
 
-        const decrypted = await decryptData(bytes.buffer, file.encryption_iv!, user.id, profile.encryption_salt);
+      while (usedNames.has(candidate)) {
+        index += 1;
+        candidate = `${stem} (${index})${extension}`;
+      }
+
+      usedNames.add(candidate);
+      return candidate;
+    };
+
+    try {
+      if (selectedFiles.length === 1) {
+        const file = selectedFiles[0];
+        if (!file.telegram_file_id || !file.encryption_iv) return;
+
+        const encrypted = await downloadEncryptedFromTelegram({ fileId: file.telegram_file_id });
+        const decrypted = await decryptData(encrypted, file.encryption_iv, user.id, profile.encryption_salt);
         const blob = new Blob([decrypted], { type: file.mime_type || 'application/octet-stream' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = file.original_name || file.name;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        // Small delay between downloads so browser doesn't block them
-        await new Promise(r => setTimeout(r, 500));
-      } catch (err) { console.error('Download error:', err); }
+        triggerDownload(blob, file.original_name || file.name);
+        onExitSelectMode();
+        return;
+      }
+
+      const { default: JSZip } = await import('jszip');
+      const zip = new JSZip();
+      const usedNames = new Set<string>();
+
+      for (const file of selectedFiles) {
+        if (!file.telegram_file_id || !file.encryption_iv) continue;
+
+        const encrypted = await downloadEncryptedFromTelegram({ fileId: file.telegram_file_id });
+        const decrypted = await decryptData(encrypted, file.encryption_iv, user.id, profile.encryption_salt);
+        const fileName = resolveUniqueName(file.original_name || file.name, usedNames);
+        zip.file(fileName, decrypted);
+      }
+
+      const zipBlob = await zip.generateAsync({
+        type: 'blob',
+        compression: 'DEFLATE',
+        compressionOptions: { level: 6 },
+      });
+
+      const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      triggerDownload(zipBlob, `televault-files-${timestamp}.zip`);
+      onExitSelectMode();
+    } catch (error) {
+      console.error('Batch download failed:', error);
+      toast.error('Failed to download selected files');
     }
-    onExitSelectMode();
   };
 
   return (
