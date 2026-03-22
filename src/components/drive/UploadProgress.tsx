@@ -1,20 +1,21 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { useDriveStore } from '@/stores/driveStore';
 import { Progress } from '@/components/ui/progress';
-import { CheckCircle2, Loader2, AlertCircle, X } from 'lucide-react';
+import { CheckCircle2, Loader2, AlertCircle, X, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 export const UploadProgress = () => {
-  const { uploads, removeUpload } = useDriveStore();
+  const { uploads, removeUpload, cancelAllUploads } = useDriveStore();
 
   if (uploads.size === 0) return null;
 
   const items = Array.from(uploads.values());
-  const activeCount = items.filter(i => i.status !== 'done' && i.status !== 'error').length;
+  const activeCount = items.filter(i => i.status === 'encrypting' || i.status === 'uploading' || i.status === 'saving').length;
   const doneCount = items.filter(i => i.status === 'done').length;
+  const cancelledCount = items.filter(i => i.status === 'cancelled').length;
 
   const cancelAll = () => {
-    items.forEach(item => removeUpload(item.id));
+    cancelAllUploads();
   };
 
   return (
@@ -29,7 +30,7 @@ export const UploadProgress = () => {
           <p className="text-xs font-medium">
             {activeCount > 0 
               ? `Uploading ${activeCount} file${activeCount > 1 ? 's' : ''}` 
-              : `${doneCount} complete`}
+              : `${doneCount} complete${cancelledCount > 0 ? `, ${cancelledCount} cancelled` : ''}`}
           </p>
           {activeCount > 0 && (
             <Button variant="ghost" size="icon" onClick={cancelAll} className="h-6 w-6">
@@ -43,6 +44,8 @@ export const UploadProgress = () => {
               <div className="shrink-0">
                 {item.status === 'done' ? (
                   <CheckCircle2 className="h-3.5 w-3.5 text-success" />
+                ) : item.status === 'cancelled' ? (
+                  <XCircle className="h-3.5 w-3.5 text-muted-foreground" />
                 ) : item.status === 'error' ? (
                   <AlertCircle className="h-3.5 w-3.5 text-destructive" />
                 ) : (
