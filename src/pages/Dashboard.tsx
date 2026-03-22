@@ -12,7 +12,7 @@ import { generateSalt } from '@/lib/encryption';
 import { motion } from 'framer-motion';
 
 const Dashboard = () => {
-  const { fetchContents, currentFolderId, setActiveView, activeView, clearSelection } = useDriveStore();
+  const { fetchContents, setActiveView, activeView, clearSelection } = useDriveStore();
   const { user, profile, fetchProfile } = useAuthStore();
 
   useEffect(() => {
@@ -27,8 +27,8 @@ const Dashboard = () => {
   }, [user, profile, fetchProfile]);
 
   useEffect(() => {
-    fetchContents(currentFolderId);
-  }, [currentFolderId, fetchContents]);
+    fetchContents(null);
+  }, [fetchContents]);
 
   const handleViewChange = useCallback((view: string) => {
     clearSelection();
