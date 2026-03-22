@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { supabase } from '@/integrations/supabase/client';
 import { decryptData } from '@/lib/encryption';
+import { downloadSharedEncryptedFile } from '@/lib/transfer';
 import { Cloud, Download, Loader2, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
@@ -40,49 +40,25 @@ const SharePage = () => {
 
     try {
       setProgress(10);
-      setStatusText('Looking up file...');
+      setStatusText('Loading shared file...');
 
-      const { data: shareData, error: shareErr } = await supabase
-        .from('shared_links')
-        .select('*')
-        .eq('token', token)
-        .single();
+      const { encrypted, fileName: sharedFileName, mimeType: sharedMimeType, encryptionIv } = await downloadSharedEncryptedFile({ token });
+      if (!encryptionIv) throw new Error('Missing encryption metadata');
 
-      if (shareErr || !shareData) { setError('Share link not found or expired'); setLoading(false); return; }
-      if (shareData.expires_at && new Date(shareData.expires_at) < new Date()) { setError('Share link has expired'); setLoading(false); return; }
-
-      // Fetch file separately
-      const { data: file, error: fileErr } = await supabase
-        .from('files')
-        .select('*')
-        .eq('id', shareData.file_id)
-        .single();
-
-      if (fileErr || !file) { setError('File not found'); setLoading(false); return; }
-
-      setFileName(file.original_name || file.name);
-      setMimeType(file.mime_type || '');
+      setFileName(sharedFileName);
+      setMimeType(sharedMimeType);
       setProgress(20);
       setStatusText('Downloading...');
-
-      const { data, error: dlErr } = await supabase.functions.invoke('telegram-download', {
-        body: { fileId: file.telegram_file_id },
-      });
-      if (dlErr || !data?.fileData) throw new Error('Download failed');
 
       setProgress(60);
       setStatusText('Decrypting...');
 
-      const binaryString = atob(data.fileData);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-
-      const decrypted = await decryptData(bytes.buffer, file.encryption_iv!, userId, salt);
+      const decrypted = await decryptData(encrypted, encryptionIv, userId, salt);
 
       setProgress(90);
       setStatusText('Preparing...');
 
-      const blob = new Blob([decrypted], { type: file.mime_type || 'application/octet-stream' });
+      const blob = new Blob([decrypted], { type: sharedMimeType || 'application/octet-stream' });
       const url = URL.createObjectURL(blob);
       setBlobUrl(url);
       setProgress(100);

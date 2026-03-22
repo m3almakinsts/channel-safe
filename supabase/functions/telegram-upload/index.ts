@@ -2,12 +2,21 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
+
+function decodeBase64(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
+    return new Response('ok', { headers: corsHeaders });
   }
 
   try {
@@ -35,17 +44,41 @@ Deno.serve(async (req) => {
       });
     }
 
-    const { fileData, fileName, mimeType } = await req.json();
+    let binaryData: Uint8Array;
+    let fileName: string;
+    let mimeType: string;
 
-    if (!fileData || !fileName) {
-      return new Response(JSON.stringify({ error: 'Missing fileData or fileName' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+    const contentType = req.headers.get('content-type') || '';
+
+    if (contentType.includes('multipart/form-data')) {
+      const formData = await req.formData();
+      const uploadedFile = formData.get('file');
+
+      if (!(uploadedFile instanceof File)) {
+        return new Response(JSON.stringify({ error: 'Missing encrypted file' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      fileName = (formData.get('fileName')?.toString() || uploadedFile.name || 'upload.enc').trim();
+      mimeType = (formData.get('mimeType')?.toString() || uploadedFile.type || 'application/octet-stream').trim();
+      binaryData = new Uint8Array(await uploadedFile.arrayBuffer());
+    } else {
+      const body = await req.json();
+      const fileData = body?.fileData;
+      fileName = body?.fileName;
+      mimeType = body?.mimeType || 'application/octet-stream';
+
+      if (!fileData || !fileName) {
+        return new Response(JSON.stringify({ error: 'Missing fileData or fileName' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      binaryData = decodeBase64(fileData);
     }
-
-    // Optimized base64 decoding using Deno's built-in
-    const binaryData = Uint8Array.from(atob(fileData), c => c.charCodeAt(0));
 
     // Upload to Telegram
     const formData = new FormData();
