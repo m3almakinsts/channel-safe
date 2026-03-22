@@ -11,6 +11,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { supabase } from '@/integrations/supabase/client';
 import { useAuthStore } from '@/stores/authStore';
 import { decryptData } from '@/lib/encryption';
+import { downloadEncryptedFromTelegram } from '@/lib/transfer';
 import { toast } from 'sonner';
 
 function formatSize(bytes: number): string {
@@ -100,14 +101,8 @@ export const FileGrid = () => {
   const downloadFile = async (file: FileItem) => {
     if (!user || !profile?.encryption_salt || !file.telegram_file_id) return;
     try {
-      const { data, error } = await supabase.functions.invoke('telegram-download', { body: { fileId: file.telegram_file_id } });
-      if (error || !data?.fileData) throw error || new Error('No data');
-
-      const binaryString = atob(data.fileData);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-
-      const decrypted = await decryptData(bytes.buffer, file.encryption_iv!, user.id, profile.encryption_salt);
+      const encrypted = await downloadEncryptedFromTelegram({ fileId: file.telegram_file_id });
+      const decrypted = await decryptData(encrypted, file.encryption_iv!, user.id, profile.encryption_salt);
       const blob = new Blob([decrypted], { type: file.mime_type || 'application/octet-stream' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -140,11 +135,34 @@ export const FileGrid = () => {
       if (error) throw error;
 
       const shareUrl = `${window.location.origin}/share/${token}#${btoa(`${user.id}:${profile.encryption_salt}`)}`;
-      await navigator.clipboard.writeText(shareUrl);
-      toast.success('Share link copied to clipboard');
+      let delivered = false;
+
+      if (typeof navigator !== 'undefined' && 'share' in navigator) {
+        try {
+          await navigator.share({ title: file.original_name || file.name, url: shareUrl });
+          delivered = true;
+        } catch {
+          // ignored: user may close native share sheet
+        }
+      }
+
+      if (!delivered && navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(shareUrl);
+          delivered = true;
+        } catch {
+          // ignored: clipboard may be blocked on some mobile contexts
+        }
+      }
+
+      if (!delivered) {
+        window.prompt('Copy this share link', shareUrl);
+      }
+
+      toast.success('Share link created');
     } catch (err: any) {
       console.error('Share error:', err);
-      toast.error('Failed to create share link');
+      toast.error('Share link creation failed');
     }
   };
 
@@ -181,7 +199,7 @@ export const FileGrid = () => {
             <FolderListItem key={folder.id} folder={folder} selected={selectedFolderIds.has(folder.id)} isSelecting={isSelecting} shake={selectionMode} onOpen={() => handleItemClick('folder', folder.id, () => !isTrashView && setCurrentFolder(folder.id))} onToggleStar={() => toggleStar('folders', folder.id, folder.is_starred)} onTrash={() => moveToTrash('folders', folder.id)} onRestore={() => restoreFromTrash('folders', folder.id)} onDelete={() => permanentDelete('folders', folder.id)} onRename={() => setRenameTarget({ type: 'folders', id: folder.id, name: folder.name })} isTrashView={isTrashView} />
           ))}
           {sortedFiles.map(file => (
-            <FileListItem key={file.id} file={file} selected={selectedFileIds.has(file.id)} isSelecting={isSelecting} shake={selectionMode} onToggleStar={() => toggleStar('files', file.id, file.is_starred)} onTrash={() => moveToTrash('files', file.id)} onRestore={() => restoreFromTrash('files', file.id)} onDelete={() => permanentDelete('files', file.id)} onRename={() => setRenameTarget({ type: 'files', id: file.id, name: file.original_name || file.name })} onPreview={() => handleItemClick('file', file.id, () => setPreviewFile(file))} onDownload={() => downloadFile(file)} onShare={() => shareFile(file)} isTrashView={isTrashView} />
+            <FileListItem key={file.id} file={file} selected={selectedFileIds.has(file.id)} isSelecting={isSelecting} shake={selectionMode} onToggleStar={() => toggleStar('files', file.id, file.is_starred)} onTrash={() => moveToTrash('files', file.id)} onRestore={() => restoreFromTrash('files', file.id)} onDelete={() => permanentDelete('files', file.id)} onRename={() => setRenameTarget({ type: 'files', id: file.id, name: file.original_name || file.name })} onPreview={() => handleItemClick('file', file.id, () => { if (!isTrashView) setPreviewFile(file); })} onDownload={() => downloadFile(file)} onShare={() => shareFile(file)} isTrashView={isTrashView} />
           ))}
         </motion.div>
       ) : (
@@ -201,7 +219,7 @@ export const FileGrid = () => {
               <p className="text-xs font-medium text-muted-foreground mb-3 uppercase tracking-wider">Files</p>
               <motion.div variants={container} initial="hidden" animate="show" className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
                 {sortedFiles.map(file => (
-                  <FileGridItem key={file.id} file={file} selected={selectedFileIds.has(file.id)} isSelecting={isSelecting} shake={selectionMode} onToggleStar={() => toggleStar('files', file.id, file.is_starred)} onTrash={() => moveToTrash('files', file.id)} onRestore={() => restoreFromTrash('files', file.id)} onDelete={() => permanentDelete('files', file.id)} onRename={() => setRenameTarget({ type: 'files', id: file.id, name: file.original_name || file.name })} onPreview={() => handleItemClick('file', file.id, () => setPreviewFile(file))} onDownload={() => downloadFile(file)} onShare={() => shareFile(file)} isTrashView={isTrashView} />
+                  <FileGridItem key={file.id} file={file} selected={selectedFileIds.has(file.id)} isSelecting={isSelecting} shake={selectionMode} onToggleStar={() => toggleStar('files', file.id, file.is_starred)} onTrash={() => moveToTrash('files', file.id)} onRestore={() => restoreFromTrash('files', file.id)} onDelete={() => permanentDelete('files', file.id)} onRename={() => setRenameTarget({ type: 'files', id: file.id, name: file.original_name || file.name })} onPreview={() => handleItemClick('file', file.id, () => { if (!isTrashView) setPreviewFile(file); })} onDownload={() => downloadFile(file)} onShare={() => shareFile(file)} isTrashView={isTrashView} />
                 ))}
               </motion.div>
             </div>
@@ -232,6 +250,12 @@ interface ItemMenuProps {
 }
 
 function ItemMenu({ onToggleStar, onTrash, onRename, isStarred, onDownload, onShare, onRestore, onDelete, isTrashView }: ItemMenuProps) {
+  const runAction = (event: Event, action?: () => void) => {
+    event.preventDefault();
+    event.stopPropagation?.();
+    action?.();
+  };
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -242,16 +266,16 @@ function ItemMenu({ onToggleStar, onTrash, onRename, isStarred, onDownload, onSh
       <DropdownMenuContent align="end" className="w-44">
         {isTrashView ? (
           <>
-            {onRestore && <DropdownMenuItem onClick={onRestore}><RotateCcw className="h-4 w-4 mr-2" />Restore</DropdownMenuItem>}
-            {onDelete && <DropdownMenuItem onClick={onDelete} className="text-destructive"><Trash2 className="h-4 w-4 mr-2" />Delete forever</DropdownMenuItem>}
+            {onRestore && <DropdownMenuItem onSelect={(event) => runAction(event, onRestore)}><RotateCcw className="h-4 w-4 mr-2" />Restore</DropdownMenuItem>}
+            {onDelete && <DropdownMenuItem onSelect={(event) => runAction(event, onDelete)} className="text-destructive"><Trash2 className="h-4 w-4 mr-2" />Delete forever</DropdownMenuItem>}
           </>
         ) : (
           <>
-            {onDownload && <DropdownMenuItem onClick={onDownload}><Download className="h-4 w-4 mr-2" />Download</DropdownMenuItem>}
-            {onShare && <DropdownMenuItem onClick={onShare}><Link2 className="h-4 w-4 mr-2" />Share link</DropdownMenuItem>}
-            <DropdownMenuItem onClick={onRename}><Pencil className="h-4 w-4 mr-2" />Rename</DropdownMenuItem>
-            <DropdownMenuItem onClick={onToggleStar}><Star className={`h-4 w-4 mr-2 ${isStarred ? 'fill-warning text-warning' : ''}`} />{isStarred ? 'Unstar' : 'Star'}</DropdownMenuItem>
-            <DropdownMenuItem onClick={onTrash} className="text-destructive"><Trash2 className="h-4 w-4 mr-2" />Move to trash</DropdownMenuItem>
+            {onDownload && <DropdownMenuItem onSelect={(event) => runAction(event, onDownload)}><Download className="h-4 w-4 mr-2" />Download</DropdownMenuItem>}
+            {onShare && <DropdownMenuItem onSelect={(event) => runAction(event, onShare)}><Link2 className="h-4 w-4 mr-2" />Share link</DropdownMenuItem>}
+            <DropdownMenuItem onSelect={(event) => runAction(event, onRename)}><Pencil className="h-4 w-4 mr-2" />Rename</DropdownMenuItem>
+            <DropdownMenuItem onSelect={(event) => runAction(event, onToggleStar)}><Star className={`h-4 w-4 mr-2 ${isStarred ? 'fill-warning text-warning' : ''}`} />{isStarred ? 'Unstar' : 'Star'}</DropdownMenuItem>
+            <DropdownMenuItem onSelect={(event) => runAction(event, onTrash)} className="text-destructive"><Trash2 className="h-4 w-4 mr-2" />Move to trash</DropdownMenuItem>
           </>
         )}
       </DropdownMenuContent>
@@ -300,7 +324,7 @@ function FileGridItem({ file, selected, isSelecting, shake, onToggleStar, onTras
     <motion.div
       variants={itemAnim}
       animate={shake && isSelecting ? shakeAnimation : { rotate: 0 }}
-      onClick={isTrashView ? undefined : onPreview}
+      onClick={onPreview}
       className={`group flex flex-col rounded-lg bg-surface hover:bg-surface-hover cursor-pointer transition-all drive-shadow hover:drive-shadow-hover overflow-hidden no-select ${selected ? 'ring-2 ring-primary bg-accent' : ''}`}
     >
       <div className="h-28 flex items-center justify-center bg-surface relative">
@@ -344,7 +368,7 @@ function FolderListItem({ folder, selected, isSelecting, shake, onOpen, onToggle
 
 function FileListItem({ file, selected, isSelecting, shake, onToggleStar, onTrash, onRename, onPreview, onDownload, onShare, onRestore, onDelete, isTrashView }: FileItemProps) {
   return (
-    <motion.div variants={itemAnim} animate={shake && isSelecting ? shakeAnimation : { rotate: 0 }} onClick={isTrashView ? undefined : onPreview} className={`group flex items-center gap-3 py-2.5 px-3 rounded-lg hover:bg-surface-hover cursor-pointer transition-colors no-select ${selected ? 'bg-accent' : ''}`}>
+    <motion.div variants={itemAnim} animate={shake && isSelecting ? shakeAnimation : { rotate: 0 }} onClick={onPreview} className={`group flex items-center gap-3 py-2.5 px-3 rounded-lg hover:bg-surface-hover cursor-pointer transition-colors no-select ${selected ? 'bg-accent' : ''}`}>
       {isSelecting && <SelectionCheck selected={selected} />}
       <FileIcon mimeType={file.mime_type} className="h-5 w-5 shrink-0" />
       <span className="text-sm font-medium flex-1 truncate">{file.original_name || file.name}</span>
