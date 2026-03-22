@@ -5,23 +5,11 @@ import { supabase } from '@/integrations/supabase/client';
 import { useDriveStore } from '@/stores/driveStore';
 import { useAuthStore } from '@/stores/authStore';
 import { encryptData } from '@/lib/encryption';
+import { uploadEncryptedToTelegram } from '@/lib/transfer';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  const chunkSize = 8192;
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
-    for (let j = 0; j < chunk.length; j++) {
-      binary += String.fromCharCode(chunk[j]);
-    }
-  }
-  return btoa(binary);
-}
 
 async function hashFileName(name: string): Promise<string> {
   const encoder = new TextEncoder();
@@ -31,14 +19,24 @@ async function hashFileName(name: string): Promise<string> {
   return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
 }
 
-const MAX_CONCURRENT = 3;
+const MAX_CONCURRENT = 4;
 
 export const NewButton = () => {
   const [open, setOpen] = useState(false);
   const [folderDialog, setFolderDialog] = useState(false);
   const [folderName, setFolderName] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { currentFolderId, fetchContents, addUpload, updateUpload, removeUpload, selectedFileIds, selectedFolderIds } = useDriveStore();
+  const {
+    currentFolderId,
+    fetchContents,
+    addUpload,
+    updateUpload,
+    removeUpload,
+    registerUploadController,
+    unregisterUploadController,
+    selectedFileIds,
+    selectedFolderIds,
+  } = useDriveStore();
   const { user, profile } = useAuthStore();
 
   const isSelecting = selectedFileIds.size > 0 || selectedFolderIds.size > 0;
@@ -57,25 +55,36 @@ export const NewButton = () => {
     setOpen(false);
   };
 
-  const uploadSingleFile = async (file: File) => {
+  const uploadSingleFile = async (file: File, batchGeneration: number) => {
     const tempId = crypto.randomUUID();
+    const abortController = new AbortController();
+    let wasCancelled = false;
+
+    const isBatchCancelled = () => useDriveStore.getState().uploadCancelGeneration !== batchGeneration;
+
     addUpload({ id: tempId, name: file.name, progress: 0, status: 'encrypting' });
+    registerUploadController(tempId, abortController);
 
     try {
+      if (isBatchCancelled()) throw new DOMException('Upload cancelled', 'AbortError');
+
       const buffer = await file.arrayBuffer();
       updateUpload(tempId, { progress: 15, status: 'encrypting' });
+
+      if (isBatchCancelled()) throw new DOMException('Upload cancelled', 'AbortError');
 
       const { encrypted, iv } = await encryptData(buffer, user!.id, profile!.encryption_salt!);
       updateUpload(tempId, { progress: 40, status: 'uploading' });
 
+      if (isBatchCancelled()) throw new DOMException('Upload cancelled', 'AbortError');
+
       const hashedName = await hashFileName(file.name);
-      const base64Data = arrayBufferToBase64(encrypted);
-
-      const { data: uploadData, error: uploadError } = await supabase.functions.invoke('telegram-upload', {
-        body: { fileData: base64Data, fileName: `${hashedName}.enc`, mimeType: 'application/octet-stream' },
+      const uploadData = await uploadEncryptedToTelegram({
+        encrypted,
+        fileName: `${hashedName}.enc`,
+        mimeType: 'application/octet-stream',
+        signal: abortController.signal,
       });
-
-      if (uploadError) throw uploadError;
       updateUpload(tempId, { progress: 75, status: 'saving' });
 
       const { error: dbError } = await supabase.from('files').insert({
@@ -94,11 +103,19 @@ export const NewButton = () => {
       if (dbError) throw dbError;
       updateUpload(tempId, { progress: 100, status: 'done' });
     } catch (err) {
-      console.error('Upload failed:', err);
-      updateUpload(tempId, { status: 'error', progress: 0 });
-      toast.error(`Failed to upload ${file.name}`);
+      const isAbort = err instanceof DOMException && err.name === 'AbortError';
+
+      if (isAbort) {
+        wasCancelled = true;
+        updateUpload(tempId, { status: 'cancelled', progress: 0 });
+      } else {
+        console.error('Upload failed:', err);
+        updateUpload(tempId, { status: 'error', progress: 0 });
+        toast.error(`Failed to upload ${file.name}`);
+      }
     } finally {
-      setTimeout(() => removeUpload(tempId), 3000);
+      unregisterUploadController(tempId);
+      setTimeout(() => removeUpload(tempId), wasCancelled ? 1200 : 3000);
     }
   };
 
@@ -111,24 +128,31 @@ export const NewButton = () => {
 
     setOpen(false);
     const fileList = Array.from(files);
+    const batchGeneration = useDriveStore.getState().uploadCancelGeneration;
+    const isBatchCancelled = () => useDriveStore.getState().uploadCancelGeneration !== batchGeneration;
 
     const queue = [...fileList];
     const active: Promise<void>[] = [];
 
     const processNext = async () => {
-      while (queue.length > 0) {
+      while (queue.length > 0 && !isBatchCancelled()) {
         if (active.length >= MAX_CONCURRENT) {
           await Promise.race(active);
         }
+
+        if (isBatchCancelled()) break;
+
         const file = queue.shift();
         if (!file) break;
-        const p = uploadSingleFile(file).then(() => {
+
+        const p = uploadSingleFile(file, batchGeneration).then(() => {
           const idx = active.indexOf(p);
           if (idx > -1) active.splice(idx, 1);
         });
         active.push(p);
       }
-      await Promise.all(active);
+
+      await Promise.allSettled(active);
     };
 
     await processNext();
