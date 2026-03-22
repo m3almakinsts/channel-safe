@@ -6,20 +6,28 @@ const KEY_LENGTH = 256;
 const IV_LENGTH = 12;
 const SALT_LENGTH = 16;
 const PBKDF2_ITERATIONS = 100000;
+const BASE64_CHUNK_SIZE = 0x8000;
+
+const derivedKeyCache = new Map<string, Promise<CryptoKey>>();
 
 export function generateSalt(): string {
   const salt = crypto.getRandomValues(new Uint8Array(SALT_LENGTH));
   return arrayBufferToBase64(salt.buffer);
 }
 
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
+export function arrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
-  let binary = '';
-  bytes.forEach(b => binary += String.fromCharCode(b));
-  return btoa(binary);
+  const chunks: string[] = [];
+
+  for (let i = 0; i < bytes.length; i += BASE64_CHUNK_SIZE) {
+    const chunk = bytes.subarray(i, i + BASE64_CHUNK_SIZE);
+    chunks.push(String.fromCharCode(...chunk));
+  }
+
+  return btoa(chunks.join(''));
 }
 
-function base64ToArrayBuffer(base64: string): ArrayBuffer {
+export function base64ToArrayBuffer(base64: string): ArrayBuffer {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {
@@ -29,6 +37,13 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
 }
 
 async function deriveKey(userId: string, salt: string): Promise<CryptoKey> {
+  const cacheKey = `${userId}:${salt}`;
+  const cached = derivedKeyCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const derivePromise = (async () => {
   const encoder = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey(
     'raw',
@@ -50,6 +65,16 @@ async function deriveKey(userId: string, salt: string): Promise<CryptoKey> {
     false,
     ['encrypt', 'decrypt']
   );
+  })();
+
+  derivedKeyCache.set(cacheKey, derivePromise);
+
+  try {
+    return await derivePromise;
+  } catch (error) {
+    derivedKeyCache.delete(cacheKey);
+    throw error;
+  }
 }
 
 export async function encryptData(
