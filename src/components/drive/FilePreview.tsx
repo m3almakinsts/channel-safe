@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import { X, Download, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { supabase } from '@/integrations/supabase/client';
 import { useAuthStore } from '@/stores/authStore';
 import { decryptData } from '@/lib/encryption';
+import { downloadEncryptedFromTelegram } from '@/lib/transfer';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { toast } from 'sonner';
@@ -47,23 +47,13 @@ export const FilePreview = ({ file, onClose }: FilePreviewProps) => {
     setStatusText('Downloading...');
     try {
       setProgress(10);
-      const { data, error } = await supabase.functions.invoke('telegram-download', {
-        body: { fileId: file.telegram_file_id },
-      });
-
-      if (error || !data?.fileData) throw error || new Error('No data returned');
+      const encrypted = await downloadEncryptedFromTelegram({ fileId: file.telegram_file_id });
 
       setProgress(50);
       setStatusText('Decrypting...');
 
-      const binaryString = atob(data.fileData);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-
       setProgress(70);
-      const decrypted = await decryptData(bytes.buffer, file.encryption_iv!, user.id, profile.encryption_salt);
+      const decrypted = await decryptData(encrypted, file.encryption_iv!, user.id, profile.encryption_salt);
 
       setProgress(90);
       setStatusText('Preparing...');
